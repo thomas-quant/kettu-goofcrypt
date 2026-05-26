@@ -10,7 +10,7 @@ import { decryptWithCachedKeys } from "../core/decrypt";
 import { getCachedKey, deriveKey } from "../core/keycache";
 import { getPasswordList, settings } from "../settings";
 import { isCloaked } from "../stego/zwc";
-import { FluxDispatcher } from "./metro";
+import { FluxDispatcher, showToast } from "./metro";
 
 let unpatch: (() => void) | null = null;
 const deriving = new Set<string>(); // messageId guard against duplicate background work
@@ -38,6 +38,7 @@ function backgroundDecrypt(message: any, channelId: string): void {
     // Only bother if at least one password's key isn't cached yet.
     if (passwords.every((p) => getCachedKey(channelId, p))) return;
     deriving.add(id);
+    showToast("GoofCrypt: deriving key to decrypt (one-time for this chat)…");
 
     (async () => {
         for (const pw of passwords) {

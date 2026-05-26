@@ -33,13 +33,17 @@ export function deriveKey(password: string, channelId: string): Uint8Array {
  * loop periodically, so the UI stays responsive instead of freezing during the
  * (expensive) 64 MiB derivation.
  */
+// asyncTick = how often (ms) argon2idAsync yields to the event loop. With the
+// build-time macrotask patch this keeps the UI responsive during derivation.
+const ASYNC_OPTS = { ...OPTS, asyncTick: 50 };
+
 export async function deriveKeyAsync(password: string, channelId: string): Promise<Uint8Array> {
-    return argon2idAsync(utf8Encode(password), utf8Encode(channelId), OPTS);
+    return argon2idAsync(utf8Encode(password), utf8Encode(channelId), ASYNC_OPTS);
 }
 
 /** Time one async derivation (ms), for the /encrypt bench command. */
 export async function benchOnce(): Promise<number> {
     const t0 = Date.now();
-    await argon2idAsync(utf8Encode("benchpassword"), utf8Encode("benchsaltvalue"), OPTS);
+    await argon2idAsync(utf8Encode("benchpassword"), utf8Encode("benchsaltvalue"), ASYNC_OPTS);
     return Date.now() - t0;
 }

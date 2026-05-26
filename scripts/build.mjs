@@ -22,6 +22,25 @@ const SITE = "site";
 await mkdir(SITE, { recursive: true });
 const indexOut = resolve(SITE, "index.js");
 
+// noble's argon2idAsync yields via a *microtask* (`nextTick = async () => {}`),
+// which never lets React Native render — so derivation freezes the UI. Patch it
+// to a real macrotask (setTimeout) so the UI stays responsive during the
+// (unavoidably ~slow) 64 MiB derivation.
+const nobleMacrotaskYield = {
+    name: "noble-macrotask-yield",
+    setup(b) {
+        b.onLoad({ filter: /@noble[\\/]hashes[\\/](esm[\\/])?utils\.js$/ }, async (args) => {
+            const src = await readFile(args.path, "utf8");
+            const patched = src.replace(
+                /export const nextTick = async \(\) => \{ \};/,
+                "export const nextTick = () => new Promise((r) => setTimeout(r, 0));",
+            );
+            if (patched === src) throw new Error("failed to patch noble nextTick at " + args.path);
+            return { contents: patched, loader: "js" };
+        });
+    },
+};
+
 // 1. Bundle everything into `var GoofCrypt = (() => { ... })();` (kept in memory).
 const result = await build({
     entryPoints: ["src/index.ts"],
@@ -36,6 +55,7 @@ const result = await build({
     jsx: "transform",
     jsxFactory: "React.createElement",
     jsxFragment: "React.Fragment",
+    plugins: [nobleMacrotaskYield],
     logLevel: "info",
 });
 const bundled = result.outputFiles[0].text;
