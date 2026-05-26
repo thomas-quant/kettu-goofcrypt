@@ -6,7 +6,7 @@
   "description": "GoofCord-compatible message encryption for Kettu (Discord mobile)",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node scripts/test.mjs"
+    "test": "node --experimental-wasm-stringref scripts/test.mjs"
   },
   "dependencies": {
     "@noble/ciphers": "^1.2.1",
