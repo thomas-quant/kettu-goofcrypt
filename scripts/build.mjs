@@ -1,21 +1,19 @@
 /**
  * Build the Vendetta plugin and assemble the GitHub Pages site Kettu installs
- * from:
+ * from (site/manifest.json + site/index.js).
  *
- *   site/manifest.json   (polymanifest: name, description, authors, main, hash)
- *   site/index.js        (the bundle)
+ * Kettu evaluates the JS as `vendetta => { return <js> }` and uses
+ * `result.default`, so the bundle must be a single EXPRESSION evaluating to
+ * `{ default: { onLoad, onUnload, settings } }`, with `vendetta` referenced as
+ * a free global.
  *
- * Kettu's Vendetta loader fetches `<installUrl>manifest.json` and
- * `<installUrl><main>`, then evaluates the JS as `vendetta => { return <js> }`
- * and uses `result.default`. So the bundle must be a single EXPRESSION that
- * evaluates to `{ default: { onLoad, onUnload, settings } }`.
- *
- * We achieve that with esbuild `format:iife` + `globalName` (→ `var GoofCrypt =
- * (()=>{...})();`) wrapped by a banner/footer into
- * `(()=>{ var GoofCrypt = (()=>{...})(); return GoofCrypt })()`.
- * `vendetta` is referenced as a free global (the loader's closure arg).
+ * IMPORTANT: Discord's Hermes `eval` parser rejects `class` syntax (verified
+ * on-device: SyntaxError "Invalid expression" at `var X = class`). esbuild
+ * cannot down-level classes, so we post-process the bundle through swc (es5),
+ * which transpiles `class` → functions, then wrap it into the expression form.
  */
 import { build } from "esbuild";
+import { transform } from "@swc/core";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
@@ -24,38 +22,49 @@ const SITE = "site";
 await mkdir(SITE, { recursive: true });
 const indexOut = resolve(SITE, "index.js");
 
-await build({
+// 1. Bundle everything into `var GoofCrypt = (() => { ... })();` (kept in memory).
+const result = await build({
     entryPoints: ["src/index.ts"],
     bundle: true,
     format: "iife",
     globalName: "GoofCrypt",
-    banner: { js: "(()=>{" },
-    footer: { js: ";return GoofCrypt})()" },
+    write: false,
     outfile: indexOut,
-    target: ["es2017"], // lowers optional chaining / nullish / spread
-    // Discord's Hermes `eval` parser rejects `class` syntax ("Invalid
-    // expression"), so force esbuild to down-level all class syntax to
-    // functions. (Confirmed via /eval on-device: SyntaxError at `var X = class`.)
-    supported: {
-        class: false,
-        "class-field": false,
-        "class-static-field": false,
-        "class-private-field": false,
-        "class-private-method": false,
-        "class-static-blocks": false,
-    },
+    target: ["es2017"],
     platform: "browser",
     legalComments: "none",
-    minify: false,
     jsx: "transform",
     jsxFactory: "React.createElement",
     jsxFragment: "React.Fragment",
     logLevel: "info",
 });
+const bundled = result.outputFiles[0].text;
 
-const js = await readFile(indexOut, "utf8");
-// Content hash drives Kettu's update detection (re-fetch only when JS changes).
-const hash = createHash("sha256").update(js).digest("hex").slice(0, 16);
+// 2. Down-level to ES5 so the bundle contains no `class` syntax (Hermes eval).
+const { code: lowered } = await transform(bundled, {
+    isModule: false,
+    minify: false,
+    jsc: { target: "es5", parser: { syntax: "ecmascript" }, loose: false },
+});
+
+if (/\bclass\b/.test(lowered)) {
+    throw new Error("class syntax survived swc lowering — Hermes eval would reject it");
+}
+
+// 3. Wrap into ONE expression returning the namespace (helpers + `var GoofCrypt`
+//    + return all live inside the IIFE, so it stays a single expression).
+const wrapped = `(function(){\n${lowered}\nreturn GoofCrypt;\n})()`;
+
+// Gate: must parse exactly as Kettu evaluates it (`vendetta => { return <js> }`).
+try {
+    new Function("vendetta", "return " + wrapped);
+} catch (e) {
+    throw new Error("built bundle is not a valid eval expression: " + e.message);
+}
+
+await writeFile(indexOut, wrapped);
+
+const hash = createHash("sha256").update(wrapped).digest("hex").slice(0, 16);
 
 const manifest = {
     name: "GoofCrypt",
@@ -67,4 +76,4 @@ const manifest = {
 };
 await writeFile(resolve(SITE, "manifest.json"), JSON.stringify(manifest, null, 2));
 
-console.log(`Built GoofCrypt (hash ${hash}) -> ${indexOut}`);
+console.log(`Built GoofCrypt (hash ${hash}, ${wrapped.length} bytes, class-free) -> ${indexOut}`);
