@@ -47,7 +47,9 @@ const { code: lowered } = await transform(bundled, {
     jsc: { target: "es5", parser: { syntax: "ecmascript" }, loose: false },
 });
 
-if (/\bclass\b/.test(lowered)) {
+// Detect real class *syntax* (`class {`, `class Foo {`, `class extends`), not
+// the word "class" inside swc's helper error strings.
+if (/\bclass\s*[A-Za-z0-9_$]*\s*(\{|extends\b)/.test(lowered)) {
     throw new Error("class syntax survived swc lowering — Hermes eval would reject it");
 }
 
