@@ -32,7 +32,18 @@ await build({
     banner: { js: "(()=>{" },
     footer: { js: ";return GoofCrypt})()" },
     outfile: indexOut,
-    target: ["es2017"], // Hermes-safe: lowers optional chaining / nullish / spread
+    target: ["es2017"], // lowers optional chaining / nullish / spread
+    // Discord's Hermes `eval` parser rejects `class` syntax ("Invalid
+    // expression"), so force esbuild to down-level all class syntax to
+    // functions. (Confirmed via /eval on-device: SyntaxError at `var X = class`.)
+    supported: {
+        class: false,
+        "class-field": false,
+        "class-static-field": false,
+        "class-private-field": false,
+        "class-private-method": false,
+        "class-static-blocks": false,
+    },
     platform: "browser",
     legalComments: "none",
     minify: false,
