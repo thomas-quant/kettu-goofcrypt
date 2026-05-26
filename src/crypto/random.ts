@@ -54,9 +54,9 @@ export function detectRng(): void {
     }
 
     // (2) A Metro module exposing getRandomValues / randomBytes.
-    const bunny: any = (globalThis as any).bunny;
+    const findByProps = (globalThis as any).vendetta?.metro?.findByProps;
     try {
-        const m = bunny?.metro?.findByProps?.("getRandomValues");
+        const m = findByProps?.("getRandomValues");
         if (m?.getRandomValues) {
             rngFn = (n) => {
                 const b = new Uint8Array(n);
@@ -71,7 +71,7 @@ export function detectRng(): void {
         /* ignore */
     }
     try {
-        const nm = bunny?.metro?.findByProps?.("randomBytes");
+        const nm = findByProps?.("randomBytes");
         if (nm?.randomBytes) {
             rngFn = (n) => coerce(nm.randomBytes(n), n);
             secure = true;

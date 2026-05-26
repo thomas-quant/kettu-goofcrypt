@@ -11,15 +11,17 @@ because Kettu runs in React Native's Hermes engine which has no WebAssembly.
 
 ## Install
 
-1. In Kettu: **Settings → Plugins → add repository** and paste:
+It's a Vendetta-format plugin.
+
+1. In Kettu: **Settings → Plugins → (＋) install from URL** and paste:
 
    ```
    https://thomas-quant.github.io/kettu-goofcrypt/
    ```
 
-2. Install **GoofCrypt** from the list.
-3. Open its settings and enter the **same password(s)** you use in GoofCord
-   (comma-separated for multiple), and optionally a cover message.
+   (Kettu will warn that it's an unproxied external source — tap **Continue**.)
+2. Open the plugin's settings and enter the **same password(s)** you use in
+   GoofCord (comma-separated for multiple), and optionally a cover message.
 
 ## Usage
 
@@ -62,5 +64,5 @@ All builds and tests run in **GitHub Actions** (`.github/workflows/ci.yml`):
 
 - `npm test` — esbuild-bundles `tests/harness.ts` (with the `stegcloak-rs` wasm) and
   runs the byte-compat cross-check.
-- `npm run build` — produces the Pages site `site/` (`repo.json` + `builds/<id>/`),
+- `npm run build` — produces the Pages site `site/` (`manifest.json` + `index.js`),
   which is deployed to GitHub Pages.

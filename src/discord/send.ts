@@ -1,10 +1,9 @@
 /**
- * Outgoing-message patches. When sending is enabled, rewrite message.content to
- * its encrypted (cover + hidden) form before it leaves the device.
+ * Outgoing-message patches (Vendetta patcher). When sending is enabled, rewrite
+ * message.content to its encrypted (cover + hidden) form before it is sent.
  *
- * Invariant established at start()/command time: `enabled` is only ever true
- * when a usable RNG exists (secure, or the user explicitly opted into insecure).
- * So this code never has to silently fall back to plaintext for RNG reasons.
+ * Invariant (enforced at load/command time): `enabled` is only true when a
+ * usable RNG exists, so this never silently falls back to plaintext for RNG.
  */
 import { encryptMessage, MessageTooLongError } from "../core/encrypt";
 import { getRandomBytes } from "../crypto/random";
@@ -35,7 +34,7 @@ function encryptInto(message: any, channelId: string): "ok" | "plaintext" | "abo
             showToast("GoofCrypt: message too long to encrypt — not sent");
             return "abort";
         }
-        bunny.plugin.logger.error("GoofCrypt encrypt failed", e);
+        vendetta.logger.error("GoofCrypt encrypt failed", e);
         showToast("GoofCrypt: encryption failed — not sent");
         return "abort";
     }
@@ -44,25 +43,22 @@ function encryptInto(message: any, channelId: string): "ok" | "plaintext" | "abo
 export function patchSend(): void {
     const MA = MessageActions();
 
-    // sendMessage(channelId, message, replyRef, options) — use `instead` so we
-    // can abort the send on a hard failure (over-length / error).
+    // sendMessage(channelId, message, replyRef, options)
     disposers.push(
-        bunny.api.patcher.instead("sendMessage", MA, function (this: any, args: any[], orig: Function) {
-            if (settings().enabled) {
-                const result = encryptInto(args[1], args[0]);
-                if (result === "abort") return Promise.resolve(undefined);
+        vendetta.patcher.instead("sendMessage", MA, function (this: any, args: any[], orig: Function) {
+            if (settings().enabled && encryptInto(args[1], args[0]) === "abort") {
+                return Promise.resolve(undefined); // abort the send
             }
             return orig.apply(this, args);
         }),
     );
 
-    // editMessage(channelId, messageId, message) — best-effort; leave unmodified on failure.
+    // editMessage(channelId, messageId, message)
     if (MA?.editMessage) {
         disposers.push(
-            bunny.api.patcher.instead("editMessage", MA, function (this: any, args: any[], orig: Function) {
-                if (settings().enabled) {
-                    const result = encryptInto(args[2], args[0]);
-                    if (result === "abort") return Promise.resolve(undefined);
+            vendetta.patcher.instead("editMessage", MA, function (this: any, args: any[], orig: Function) {
+                if (settings().enabled && encryptInto(args[2], args[0]) === "abort") {
+                    return Promise.resolve(undefined);
                 }
                 return orig.apply(this, args);
             }),

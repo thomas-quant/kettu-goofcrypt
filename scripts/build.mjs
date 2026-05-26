@@ -1,67 +1,59 @@
 /**
- * Build the external Kettu (Bunny spec-3) plugin and assemble the GitHub Pages
- * site that Kettu installs from:
+ * Build the Vendetta plugin and assemble the GitHub Pages site Kettu installs
+ * from:
  *
- *   site/repo.json
- *   site/builds/<id>/manifest.json
- *   site/builds/<id>/index.js   (the IIFE)
+ *   site/manifest.json   (polymanifest: name, description, authors, main, hash)
+ *   site/index.js        (the bundle)
  *
- * The loader wraps index.js as `(bunny, definePlugin) => { <iife>; return plugin?.default ?? plugin }`.
- * We emit `var plugin = { default: <instance> }` (esbuild globalName + default export),
- * referencing `bunny`/`definePlugin` as free globals (the loader's closure args).
+ * Kettu's Vendetta loader fetches `<installUrl>manifest.json` and
+ * `<installUrl><main>`, then evaluates the JS as `vendetta => { return <js> }`
+ * and uses `result.default`. So the bundle must be a single EXPRESSION that
+ * evaluates to `{ default: { onLoad, onUnload, settings } }`.
+ *
+ * We achieve that with esbuild `format:iife` + `globalName` (→ `var GoofCrypt =
+ * (()=>{...})();`) wrapped by a banner/footer into
+ * `(()=>{ var GoofCrypt = (()=>{...})(); return GoofCrypt })()`.
+ * `vendetta` is referenced as a free global (the loader's closure arg).
  */
 import { build } from "esbuild";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
-import { resolve, dirname } from "node:path";
-
-const ID = "uk.digigrow.goofcrypt";
-const pkg = JSON.parse(await readFile("package.json", "utf8"));
-const VERSION = pkg.version;
+import { createHash } from "node:crypto";
+import { resolve } from "node:path";
 
 const SITE = "site";
-const buildDir = resolve(SITE, "builds", ID);
-await mkdir(buildDir, { recursive: true });
-
-const indexOut = resolve(buildDir, "index.js");
+await mkdir(SITE, { recursive: true });
+const indexOut = resolve(SITE, "index.js");
 
 await build({
     entryPoints: ["src/index.ts"],
     bundle: true,
     format: "iife",
-    globalName: "plugin",
+    globalName: "GoofCrypt",
+    banner: { js: "(()=>{" },
+    footer: { js: ";return GoofCrypt})()" },
     outfile: indexOut,
-    // Conservative target so output runs on Hermes (RN 0.78): esbuild lowers
-    // optional chaining / nullish / spread etc. away.
-    target: ["es2017"],
+    target: ["es2017"], // Hermes-safe: lowers optional chaining / nullish / spread
     platform: "browser",
     legalComments: "none",
     minify: false,
-    // Classic JSX: factory resolves to the file-local `React` (Settings.tsx /
-    // index.ts both bind `React` from a Metro lookup).
     jsx: "transform",
     jsxFactory: "React.createElement",
     jsxFragment: "React.Fragment",
     logLevel: "info",
 });
 
+const js = await readFile(indexOut, "utf8");
+// Content hash drives Kettu's update detection (re-fetch only when JS changes).
+const hash = createHash("sha256").update(js).digest("hex").slice(0, 16);
+
 const manifest = {
-    id: ID,
-    version: VERSION,
-    type: "plugin",
-    spec: 3,
+    name: "GoofCrypt",
+    description: "GoofCord-compatible message encryption (StegCloak interop) for Discord mobile.",
+    authors: [{ name: "zach" }],
     main: "index.js",
-    display: {
-        name: "GoofCrypt",
-        description: "GoofCord-compatible message encryption (StegCloak interop) for Discord mobile.",
-        authors: [{ name: "zach" }],
-    },
+    hash,
+    vendetta: { icon: "ic_lock_24px" },
 };
-await writeFile(resolve(buildDir, "manifest.json"), JSON.stringify(manifest, null, 2));
+await writeFile(resolve(SITE, "manifest.json"), JSON.stringify(manifest, null, 2));
 
-const repo = {
-    $meta: { name: "GoofCrypt", description: "GoofCord-compatible message encryption for Kettu" },
-    [ID]: { version: VERSION, alwaysFetch: true },
-};
-await writeFile(resolve(SITE, "repo.json"), JSON.stringify(repo, null, 2));
-
-console.log(`Built ${ID}@${VERSION} -> ${dirname(indexOut)}`);
+console.log(`Built GoofCrypt (hash ${hash}) -> ${indexOut}`);

@@ -6,8 +6,8 @@
 import { settings } from "../settings";
 import { secureRngAvailable, rngSource } from "../crypto/random";
 
-const React: any = bunny.metro.findByProps("createElement", "useState");
-const RN: any = bunny.metro.findByProps("View", "Text", "TextInput", "ScrollView", "Switch");
+const React: any = vendetta.metro.common.React;
+const RN: any = vendetta.metro.common.ReactNative;
 
 function Field(props: { label: string; hint?: string; value: string; onChange: (v: string) => void; multiline?: boolean }) {
     return (

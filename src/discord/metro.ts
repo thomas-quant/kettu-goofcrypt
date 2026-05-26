@@ -1,35 +1,33 @@
 /**
- * Lazy Metro module lookups + a robust toast helper. Everything is resolved on
- * first use (modules may not exist at plugin-eval time).
+ * Metro lookups + toast helper, against the Vendetta API. Resolved lazily on
+ * first use.
  */
 
 let _msgActions: any;
 export function MessageActions(): any {
-    return (_msgActions ??= bunny.metro.findByProps("sendMessage", "editMessage"));
+    return (_msgActions ??= vendetta.metro.findByProps("sendMessage", "editMessage"));
 }
 
-let _channelStore: any;
+export function FluxDispatcher(): any {
+    return vendetta.metro.common.FluxDispatcher;
+}
+
 export function getCurrentChannelId(): string | undefined {
-    _channelStore ??= bunny.metro.findByProps("getChannelId", "getLastSelectedChannelId");
     try {
-        return _channelStore?.getChannelId?.();
+        return vendetta.metro.common.channels?.getChannelId?.();
     } catch {
         return undefined;
     }
 }
 
-let _toasts: any;
 export function showToast(text: string): void {
     try {
-        if (bunny.ui?.toasts?.showToast) return bunny.ui.toasts.showToast(text);
-        _toasts ??= bunny.metro.findByProps("open", "close");
-        if (_toasts?.open) return _toasts.open({ content: text, source: null });
+        vendetta.ui.toasts.showToast(text);
     } catch {
-        /* fall through */
-    }
-    try {
-        bunny.plugin.logger.log("[GoofCrypt toast]", text);
-    } catch {
-        /* ignore */
+        try {
+            vendetta.logger.log("[GoofCrypt]", text);
+        } catch {
+            /* ignore */
+        }
     }
 }
