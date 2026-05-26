@@ -1,0 +1,23 @@
+{
+  "name": "kettu-goofcrypt",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "GoofCord-compatible message encryption for Kettu (Discord mobile)",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/test.mjs"
+  },
+  "dependencies": {
+    "@noble/ciphers": "^1.2.1",
+    "@noble/hashes": "^1.7.1",
+    "fflate": "^0.8.2"
+  },
+  "devDependencies": {
+    "@swc/core": "^1.10.0",
+    "esbuild": "^0.24.0",
+    "stegcloak-rs": "github:Milkshiift/stegcloak-rs",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
