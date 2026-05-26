@@ -1,10 +1,9 @@
 /**
- * Incoming-message decryption (Kettu-facing). Tries each configured password
- * (winning one first), using cached keys. Returns the marked plaintext on
- * success, or null to leave the cover text untouched (other people's messages,
- * wrong password, or not encrypted at all).
+ * Incoming-message decryption using ONLY already-cached keys (synchronous, safe
+ * to call from the Flux dispatch hook). Returns null on a miss — the caller is
+ * responsible for kicking off async key derivation and retrying.
  */
-import { getKey, rememberWinner, orderPasswords } from "./keycache";
+import { getCachedKey, rememberWinner, orderPasswords } from "./keycache";
 import { aeadDecrypt } from "../crypto/aead";
 import { decompress, utf8Decode } from "../crypto/deflate";
 import { unframe } from "./payload";
@@ -12,29 +11,27 @@ import { extract, isCloaked } from "../stego/zwc";
 
 export interface DecryptResult {
     text: string; // plaintext WITHOUT the mark prefix
-    password: string; // which password decrypted it
+    password: string;
 }
 
-/**
- * @returns the decrypted plaintext (no mark), or null if not decryptable.
- */
-export function decryptMessage(content: string, channelId: string, passwords: string[]): DecryptResult | null {
-    if (!content || !channelId || !isCloaked(content)) return null;
-    if (passwords.length === 0) return null;
+/** Decrypt with cached keys only; never derives. Returns null if not (yet) decryptable. */
+export function decryptWithCachedKeys(content: string, channelId: string, passwords: string[]): DecryptResult | null {
+    if (!content || !channelId || passwords.length === 0 || !isCloaked(content)) return null;
 
     let nonce: Uint8Array;
     let ctAndTag: Uint8Array;
     try {
         ({ nonce, ctAndTag } = unframe(extract(content)));
     } catch {
-        return null; // not our payload format
+        return null;
     }
 
     for (const password of orderPasswords(channelId, passwords)) {
         if (!password) continue;
+        const key = getCachedKey(channelId, password);
+        if (!key) continue; // not derived yet
         let plaintext: Uint8Array;
         try {
-            const key = getKey(channelId, password);
             plaintext = aeadDecrypt(key, nonce, ctAndTag);
         } catch {
             continue; // wrong password
@@ -44,7 +41,7 @@ export function decryptMessage(content: string, channelId: string, passwords: st
             rememberWinner(channelId, password);
             return { text, password };
         } catch {
-            return null; // authenticated but corrupt -> stop
+            return null; // authenticated but corrupt
         }
     }
     return null;

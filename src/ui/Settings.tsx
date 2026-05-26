@@ -10,6 +10,7 @@ const React: any = vendetta.metro.common.React;
 const RN: any = vendetta.metro.common.ReactNative;
 
 function Field(props: { label: string; hint?: string; value: string; onChange: (v: string) => void; multiline?: boolean }) {
+    const [val, setVal] = React.useState(props.value ?? "");
     return (
         <RN.View style={{ marginBottom: 18 }}>
             <RN.Text style={{ fontWeight: "600", fontSize: 15, marginBottom: 6 }}>{props.label}</RN.Text>
@@ -26,11 +27,14 @@ function Field(props: { label: string; hint?: string; value: string; onChange: (
                     color: "#fff",
                     minHeight: props.multiline ? 64 : undefined,
                 }}
-                defaultValue={props.value}
+                value={val}
                 multiline={props.multiline}
                 autoCapitalize="none"
                 autoCorrect={false}
-                onChangeText={props.onChange}
+                onChangeText={(v: string) => {
+                    setVal(v);
+                    props.onChange(v);
+                }}
             />
         </RN.View>
     );

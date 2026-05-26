@@ -1,32 +1,76 @@
 /**
- * Incoming-message decryption by patching FluxDispatcher.dispatch (Vendetta
- * patcher `before`), so message content is decrypted in place before stores
- * process it. Mirrors GoofCord's dispatch hook. Always active regardless of the
- * send toggle.
+ * Incoming-message decryption by patching FluxDispatcher.dispatch.
+ *
+ * The dispatch hook is synchronous, so it only decrypts with ALREADY-cached
+ * keys (instant). On a cache miss it derives the key asynchronously in the
+ * background, then re-dispatches the message with decrypted content — so the UI
+ * never freezes on the expensive Argon2 step.
  */
-import { decryptMessage } from "../core/decrypt";
+import { decryptWithCachedKeys } from "../core/decrypt";
+import { getCachedKey, deriveKey } from "../core/keycache";
 import { getPasswordList, settings } from "../settings";
+import { isCloaked } from "../stego/zwc";
 import { FluxDispatcher } from "./metro";
 
 let unpatch: (() => void) | null = null;
+const deriving = new Set<string>(); // messageId guard against duplicate background work
 
-function decryptOne(message: any, channelId: string | undefined): void {
-    if (!message?.content || !channelId) return;
+function isMarked(content: string): boolean {
     const mark = settings().mark;
-    if (mark && message.content.startsWith(mark)) return; // already decrypted
-    const res = decryptMessage(message.content, channelId, getPasswordList());
-    if (res) message.content = mark + res.text;
+    return !!mark && content.startsWith(mark);
+}
+
+function decryptInPlace(message: any, channelId: string | undefined): void {
+    if (!message?.content || !channelId || isMarked(message.content) || !isCloaked(message.content)) return;
+    const res = decryptWithCachedKeys(message.content, channelId, getPasswordList());
+    if (res) {
+        message.content = settings().mark + res.text;
+    } else {
+        backgroundDecrypt(message, channelId);
+    }
+}
+
+/** Derive any missing keys async, then re-dispatch the decrypted message. */
+function backgroundDecrypt(message: any, channelId: string): void {
+    const id = String(message?.id ?? "");
+    const passwords = getPasswordList();
+    if (!id || passwords.length === 0 || deriving.has(id)) return;
+    // Only bother if at least one password's key isn't cached yet.
+    if (passwords.every((p) => getCachedKey(channelId, p))) return;
+    deriving.add(id);
+
+    (async () => {
+        for (const pw of passwords) {
+            if (getCachedKey(channelId, pw)) continue;
+            try {
+                await deriveKey(channelId, pw);
+            } catch {
+                /* try next */
+            }
+        }
+        const res = decryptWithCachedKeys(message.content, channelId, passwords);
+        if (res) {
+            try {
+                FluxDispatcher().dispatch({
+                    type: "MESSAGE_UPDATE",
+                    message: { ...message, content: settings().mark + res.text },
+                });
+            } catch (e) {
+                vendetta.logger.error("GoofCrypt re-dispatch failed", e);
+            }
+        }
+    })().finally(() => deriving.delete(id));
 }
 
 function handle(payload: any): void {
     switch (payload?.type) {
         case "MESSAGE_CREATE":
         case "MESSAGE_UPDATE":
-            decryptOne(payload.message, payload.channelId ?? payload.message?.channel_id);
+            decryptInPlace(payload.message, payload.channelId ?? payload.message?.channel_id);
             break;
         case "LOAD_MESSAGES_SUCCESS":
             if (Array.isArray(payload.messages)) {
-                for (const m of payload.messages) decryptOne(m, m?.channel_id ?? payload.channelId);
+                for (const m of payload.messages) decryptInPlace(m, m?.channel_id ?? payload.channelId);
             }
             break;
         case "MESSAGE_START_EDIT": {
@@ -47,7 +91,6 @@ export function patchFlux(): void {
         } catch (e) {
             vendetta.logger.error("GoofCrypt flux decrypt error", e);
         }
-        // no return -> args unchanged (we mutated payload in place)
     });
 }
 

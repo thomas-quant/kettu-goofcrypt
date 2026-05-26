@@ -1,10 +1,12 @@
 /**
- * `/encrypt` slash command (Vendetta commands API): toggle sending, cycle
- * password, or report status. Feedback via toast.
+ * `/encrypt` slash command: toggle sending, cycle password, show status, or
+ * benchmark Argon2. Feedback via toast. Key warming is fire-and-forget async
+ * (never blocks the UI).
  */
 import { settings, chosenPassword, cyclePassword, maskPassword, getPasswordList } from "../settings";
 import { secureRngAvailable, rngSource } from "../crypto/random";
-import { getKey, isCached } from "../core/keycache";
+import { deriveKey, isCached } from "../core/keycache";
+import { benchOnce } from "../crypto/argon";
 import { showToast } from "./metro";
 
 const STRING = 3; // ApplicationCommandOptionType.STRING
@@ -15,15 +17,11 @@ function canEnable(): boolean {
     return secureRngAvailable() || settings().allowInsecureRng;
 }
 
-/** Warm the Argon2 key for this channel+password so the first send isn't laggy. */
+/** Pre-derive this channel's key in the background so the first message isn't slow. */
 function warm(channelId: string | undefined): void {
     const pw = chosenPassword();
     if (!pw || !channelId || isCached(channelId, pw)) return;
-    try {
-        getKey(channelId, pw);
-    } catch {
-        /* ignore */
-    }
+    deriveKey(channelId, pw).catch(() => {});
 }
 
 export function registerCommands(): void {
@@ -31,14 +29,14 @@ export function registerCommands(): void {
     dispose = vendetta.commands.registerCommand({
         name: "encrypt",
         displayName: "encrypt",
-        description: "Toggle GoofCrypt encryption, cycle password, or show status",
-        displayDescription: "Toggle GoofCrypt encryption, cycle password, or show status",
+        description: "GoofCrypt: on | off | toggle | cycle | status | bench",
+        displayDescription: "GoofCrypt: on | off | toggle | cycle | status | bench",
         options: [
             {
                 name: "action",
                 displayName: "action",
-                description: "on | off | toggle | cycle | status",
-                displayDescription: "on | off | toggle | cycle | status",
+                description: "on | off | toggle | cycle | status | bench",
+                displayDescription: "on | off | toggle | cycle | status | bench",
                 type: STRING,
                 required: false,
             },
@@ -51,10 +49,16 @@ export function registerCommands(): void {
             const channelId: string | undefined = ctx?.channel?.id;
 
             switch (action) {
+                case "bench":
+                    showToast("GoofCrypt: timing Argon2 (this is the per-chat cost)…");
+                    benchOnce()
+                        .then((ms) => showToast(`GoofCrypt: Argon2 took ${ms} ms`))
+                        .catch((e) => showToast("GoofCrypt bench error: " + (e?.message ?? e)));
+                    break;
                 case "on":
                 case "enable":
                     if (getPasswordList().length === 0) return void showToast("GoofCrypt: set a password in plugin settings first");
-                    if (!canEnable()) return void showToast("GoofCrypt: no secure RNG — cannot enable encryption");
+                    if (!canEnable()) return void showToast("GoofCrypt: no secure RNG — cannot enable");
                     settings().enabled = true;
                     warm(channelId);
                     showToast(`GoofCrypt ON — password ${maskPassword(chosenPassword())}`);
@@ -85,7 +89,6 @@ export function registerCommands(): void {
                     showToast(`GoofCrypt ${settings().enabled ? "ON" : "OFF"}`);
                     break;
             }
-            // No return value -> nothing posted to the channel.
         },
     });
 }

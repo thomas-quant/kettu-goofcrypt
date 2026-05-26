@@ -1,8 +1,7 @@
 /**
- * Outgoing-message encryption (Kettu-facing). Uses the cached key, so Argon2
- * runs at most once per (channel, password). Mirrors the stegcloak-rs pipeline.
+ * Outgoing-message encryption given an already-derived key (key derivation is
+ * handled asynchronously by the caller via keycache).
  */
-import { getKey } from "./keycache";
 import { aeadEncrypt } from "../crypto/aead";
 import { compress, utf8Encode } from "../crypto/deflate";
 import { frame } from "./payload";
@@ -19,14 +18,7 @@ export class MessageTooLongError extends Error {
     }
 }
 
-export function encryptMessage(
-    plaintext: string,
-    channelId: string,
-    password: string,
-    cover: string,
-    rng: RandomBytes,
-): string {
-    const key = getKey(channelId, password);
+export function encryptWithKey(plaintext: string, key: Uint8Array, cover: string, rng: RandomBytes): string {
     const compressed = compress(utf8Encode(plaintext));
     const nonce = rng(24);
     const ctAndTag = aeadEncrypt(key, nonce, compressed);

@@ -10,7 +10,7 @@
  * 64-bit ints in JS). With m=64MiB this is the expensive step; it MUST be
  * cached, never run per-message.
  */
-import { argon2id } from "@noble/hashes/argon2";
+import { argon2id, argon2idAsync } from "@noble/hashes/argon2";
 import { utf8Encode } from "./deflate";
 
 export const KEY_LENGTH = 32;
@@ -23,6 +23,23 @@ const OPTS = {
     version: 0x13, // Argon2 v1.3 (19)
 } as const;
 
+/** Synchronous — used only by the device-free harness / core/stegcloak. */
 export function deriveKey(password: string, channelId: string): Uint8Array {
     return argon2id(utf8Encode(password), utf8Encode(channelId), OPTS);
+}
+
+/**
+ * Async derivation used on-device. noble's argon2idAsync yields to the event
+ * loop periodically, so the UI stays responsive instead of freezing during the
+ * (expensive) 64 MiB derivation.
+ */
+export async function deriveKeyAsync(password: string, channelId: string): Promise<Uint8Array> {
+    return argon2idAsync(utf8Encode(password), utf8Encode(channelId), OPTS);
+}
+
+/** Time one async derivation (ms), for the /encrypt bench command. */
+export async function benchOnce(): Promise<number> {
+    const t0 = Date.now();
+    await argon2idAsync(utf8Encode("benchpassword"), utf8Encode("benchsaltvalue"), OPTS);
+    return Date.now() - t0;
 }
