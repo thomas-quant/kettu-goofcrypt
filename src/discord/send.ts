@@ -42,6 +42,10 @@ function encryptInto(message: any, channelId: string): "ok" | "plaintext" | "abo
 
 export function patchSend(): void {
     const MA = MessageActions();
+    if (!MA?.sendMessage) {
+        showToast("GoofCrypt: sendMessage module not found — sending disabled");
+        return;
+    }
 
     // sendMessage(channelId, message, replyRef, options)
     disposers.push(

@@ -5,7 +5,10 @@
 
 let _msgActions: any;
 export function MessageActions(): any {
-    return (_msgActions ??= vendetta.metro.findByProps("sendMessage", "editMessage"));
+    // The canonical MessageActions module (has sendMessage + sendBotMessage +
+    // editMessage). Fall back to a single-prop lookup like Kettu's messagefix.
+    return (_msgActions ??=
+        vendetta.metro.findByProps("sendMessage", "sendBotMessage") ?? vendetta.metro.findByProps("sendMessage"));
 }
 
 export function FluxDispatcher(): any {

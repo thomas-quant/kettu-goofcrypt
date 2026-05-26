@@ -23,22 +23,37 @@ function SettingsScreen() {
 
 export default {
     onLoad() {
-        detectRng();
+        // Each subsystem is isolated so one failure can't block the whole plugin
+        // (and decryption keeps working even if the send patch or command fails).
+        const safe = (label: string, fn: () => void) => {
+            try {
+                fn();
+            } catch (e) {
+                try {
+                    vendetta.logger.error(`GoofCrypt: ${label} failed`, e);
+                } catch {}
+                showToast(`GoofCrypt: ${label} failed — ${(e as Error)?.message ?? e}`);
+            }
+        };
 
-        const store = vendetta.plugin.storage;
-        initSettings(store);
-        initKeyCache(store);
+        safe("init", () => {
+            detectRng();
+            const store = vendetta.plugin.storage;
+            initSettings(store);
+            initKeyCache(store);
+            if (settings().enabled && !secureRngAvailable() && !settings().allowInsecureRng) {
+                settings().enabled = false;
+                showToast("GoofCrypt: no secure RNG found — encryption disabled");
+            }
+        });
 
-        // Invariant: encryption can only be ON when a usable RNG exists.
-        if (settings().enabled && !secureRngAvailable() && !settings().allowInsecureRng) {
-            settings().enabled = false;
-            showToast("GoofCrypt: no secure RNG found — encryption disabled");
-        }
+        safe("decrypt-hook", patchFlux);
+        safe("send-patch", patchSend);
+        safe("command", registerCommands);
 
-        patchSend();
-        patchFlux();
-        registerCommands();
-        vendetta.logger.log(`GoofCrypt ready (RNG: ${secureRngAvailable() ? rngSource() : "none"})`);
+        try {
+            vendetta.logger.log(`GoofCrypt ready (RNG: ${secureRngAvailable() ? rngSource() : "none"})`);
+        } catch {}
     },
 
     onUnload() {
