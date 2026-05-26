@@ -5,7 +5,7 @@
  * `vendetta.plugin.storage` is already loaded by the time onLoad runs, so
  * settings/keycache can be initialised synchronously.
  */
-import { initSettings, settings, isReady } from "./settings";
+import { initSettings, settings, isReady, getPasswordList } from "./settings";
 import { initKeyCache, clearMemory } from "./core/keycache";
 import { detectRng, secureRngAvailable, rngSource } from "./crypto/random";
 import { patchSend, unpatchSend } from "./discord/send";
@@ -41,6 +41,18 @@ export default {
             const store = vendetta.plugin.storage;
             initSettings(store);
             initKeyCache(store);
+
+            // Debug hook for on-device inspection via /eval.
+            (globalThis as any).__goofcrypt = {
+                raw: () => settings().passwords,
+                list: () => getPasswordList(),
+                set: (v: string) => {
+                    settings().passwords = v;
+                    return settings().passwords;
+                },
+                storeKeys: () => Object.keys(settings()),
+                storageRef: store,
+            };
             if (settings().enabled && !secureRngAvailable() && !settings().allowInsecureRng) {
                 settings().enabled = false;
                 showToast("GoofCrypt: no secure RNG found — encryption disabled");

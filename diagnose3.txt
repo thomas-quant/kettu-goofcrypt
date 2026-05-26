@@ -1,0 +1,1 @@
+const g=globalThis.__goofcrypt;if(!g)return `NO __goofcrypt — plugin not loaded/enabled`;const w=g.set(`aa,bb`);const r=g.raw();const direct=(g.storageRef&&g.storageRef.passwords);return `set() returned=`+JSON.stringify(w)+` | raw()=`+JSON.stringify(r)+` | storageRef.passwords=`+JSON.stringify(direct)+` | list=`+g.list().length+` | storeKeys=`+JSON.stringify(g.storeKeys());
