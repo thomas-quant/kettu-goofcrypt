@@ -40,13 +40,30 @@ export function registerCommands(): void {
                 type: STRING,
                 required: false,
             },
+            {
+                name: "set",
+                displayName: "set",
+                description: "Set password(s) directly (comma-separated). Same as the settings field.",
+                displayDescription: "Set password(s) directly (comma-separated). Same as the settings field.",
+                type: STRING,
+                required: false,
+            },
         ],
         applicationId: "-1",
         inputType: 1,
         type: 1,
         execute(args: Array<{ name: string; value: string }>, ctx: any) {
-            const action = (args.find((a) => a.name === "action")?.value ?? "toggle").toLowerCase();
             const channelId: string | undefined = ctx?.channel?.id;
+
+            // Set password(s) directly from the command (writes the same store
+            // the runtime reads — bypasses the settings UI entirely).
+            const setArg = args.find((a) => a.name === "set")?.value;
+            if (setArg !== undefined) {
+                settings().passwords = setArg;
+                return void showToast(`GoofCrypt: saved ${getPasswordList().length} password(s)`);
+            }
+
+            const action = (args.find((a) => a.name === "action")?.value ?? "toggle").toLowerCase();
 
             switch (action) {
                 case "bench":
@@ -77,8 +94,9 @@ export function registerCommands(): void {
                 }
                 case "status":
                     showToast(
-                        `GoofCrypt: ${settings().enabled ? "ON" : "OFF"} · ${getPasswordList().length} pw · ` +
-                            `pw ${maskPassword(chosenPassword())} · RNG ${secureRngAvailable() ? rngSource() : "none"}`,
+                        `GoofCrypt: ${settings().enabled ? "ON" : "OFF"} · ${getPasswordList().length} pw ` +
+                            `(raw ${settings().passwords.length} chars) · pw ${maskPassword(chosenPassword())} · ` +
+                            `RNG ${secureRngAvailable() ? rngSource() : "none"}`,
                     );
                     break;
                 default: // toggle
