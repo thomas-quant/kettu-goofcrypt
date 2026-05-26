@@ -12,6 +12,7 @@ import { patchSend, unpatchSend } from "./discord/send";
 import { patchFlux, unpatchFlux } from "./discord/flux";
 import { registerCommands, unregisterCommands } from "./discord/commands";
 import { showToast } from "./discord/metro";
+import { selfTest } from "./selfTest";
 import { SettingsComponent } from "./ui/Settings";
 
 function SettingsScreen() {
@@ -35,6 +36,14 @@ export default {
                 showToast(`GoofCrypt: ${label} failed — ${(e as Error)?.message ?? e}`);
             }
         };
+
+        safe("self-test", () => {
+            const fail = selfTest();
+            if (fail) {
+                showToast("GoofCrypt SELF-TEST FAILED: " + fail);
+                vendetta.logger.error("GoofCrypt self-test failed:", fail);
+            }
+        });
 
         safe("init", () => {
             detectRng();

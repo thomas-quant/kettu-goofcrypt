@@ -47,18 +47,24 @@ export function isReady(): boolean {
     return store !== null;
 }
 
-/** Parsed, trimmed, de-duplicated, non-empty password list. */
-export function getPasswordList(): string[] {
+/** Pure: parse a comma-separated string into trimmed, de-duplicated entries. */
+export function parsePasswords(raw: string): string[] {
     const seen = new Set<string>();
     const out: string[] = [];
-    for (const p of settings().passwords.split(",")) {
-        const t = p.trim();
+    const parts = raw.split(",");
+    for (let i = 0; i < parts.length; i++) {
+        const t = parts[i].trim();
         if (t && !seen.has(t)) {
             seen.add(t);
             out.push(t);
         }
     }
     return out;
+}
+
+/** Parsed, trimmed, de-duplicated, non-empty password list from settings. */
+export function getPasswordList(): string[] {
+    return parsePasswords(settings().passwords);
 }
 
 /** The currently-selected password for sending, or undefined if none configured. */

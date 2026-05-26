@@ -64,7 +64,16 @@ const bundled = result.outputFiles[0].text;
 const { code: lowered } = await transform(bundled, {
     isModule: false,
     minify: false,
-    jsc: { target: "es5", parser: { syntax: "ecmascript" }, loose: false },
+    jsc: {
+        target: "es5",
+        parser: { syntax: "ecmascript" },
+        loose: false,
+        // Discord's Hermes `eval` drops the first element of swc's es5
+        // `for...of` iterator-protocol lowering. This assumption makes swc emit
+        // plain index-based loops instead (verified: 53 iterator loops -> 0),
+        // bundle-wide. Safe: we only ever iterate arrays/strings.
+        assumptions: { iterableIsArray: true },
+    },
 });
 
 // Discord's Hermes eval parser rejects class & generator syntax. Verify swc's
@@ -74,6 +83,11 @@ if (/\bclass\s*[A-Za-z0-9_$]*\s*(\{|extends\b)/.test(lowered)) {
 }
 if (/function\s*\*/.test(lowered) || /\byield\b/.test(lowered)) {
     throw new Error("generator syntax survived swc lowering — Hermes eval would reject it");
+}
+// The swc es5 for...of iterator-protocol lowering drops the first element under
+// Discord's Hermes. iterableIsArray should have eliminated it; fail if it returns.
+if (/_iteratorNormalCompletion/.test(lowered)) {
+    throw new Error("iterator-protocol for...of lowering present — Hermes drops the first element; check swc iterableIsArray");
 }
 
 // 3. Wrap into ONE expression returning the namespace (helpers + `var GoofCrypt`
