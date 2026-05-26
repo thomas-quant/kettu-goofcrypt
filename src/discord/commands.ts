@@ -5,8 +5,11 @@
  */
 import { settings, chosenPassword, cyclePassword, maskPassword, getPasswordList } from "../settings";
 import { secureRngAvailable, rngSource } from "../crypto/random";
-import { deriveKey, isCached } from "../core/keycache";
+import { deriveKey, isCached, importKeys } from "../core/keycache";
 import { benchOnce } from "../crypto/argon";
+import { healthSummary } from "../core/health";
+import { fromBase64 } from "../util/base64";
+import { utf8Decode } from "../crypto/deflate";
 import { showToast } from "./metro";
 
 const STRING = 3; // ApplicationCommandOptionType.STRING
@@ -48,6 +51,14 @@ export function registerCommands(): void {
                 type: STRING,
                 required: false,
             },
+            {
+                name: "import",
+                displayName: "import",
+                description: "Import a key bundle from the desktop derive-keys tool (avoids on-device Argon2).",
+                displayDescription: "Import a key bundle from the desktop derive-keys tool (avoids on-device Argon2).",
+                type: STRING,
+                required: false,
+            },
         ],
         applicationId: "-1",
         inputType: 1,
@@ -61,6 +72,18 @@ export function registerCommands(): void {
             if (setArg !== undefined) {
                 settings().passwords = setArg;
                 return void showToast(`GoofCrypt: saved ${getPasswordList().length} password(s)`);
+            }
+
+            // Import a desktop-derived key bundle (base64 of { v, keys }).
+            const importArg = args.find((a) => a.name === "import")?.value;
+            if (importArg !== undefined) {
+                try {
+                    const obj = JSON.parse(utf8Decode(fromBase64(importArg.trim())));
+                    const n = importKeys(obj?.keys ?? obj);
+                    return void showToast(`GoofCrypt: imported ${n} key(s) — no Argon2 needed for those chats`);
+                } catch (e) {
+                    return void showToast("GoofCrypt: invalid key bundle");
+                }
             }
 
             const action = (args.find((a) => a.name === "action")?.value ?? "toggle").toLowerCase();
@@ -96,7 +119,8 @@ export function registerCommands(): void {
                     showToast(
                         `GoofCrypt: ${settings().enabled ? "ON" : "OFF"} · ${getPasswordList().length} pw ` +
                             `(raw ${settings().passwords.length} chars) · pw ${maskPassword(chosenPassword())} · ` +
-                            `RNG ${secureRngAvailable() ? rngSource() : "none"}`,
+                            `RNG ${secureRngAvailable() ? rngSource() : "none"}` +
+                            healthSummary(),
                     );
                     break;
                 default: // toggle

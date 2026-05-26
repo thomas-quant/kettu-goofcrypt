@@ -1,11 +1,16 @@
 /**
  * Outgoing-message patches. When sending is enabled, rewrite message.content to
- * its encrypted form before it is sent. Key derivation is async (never freezes):
- * if the channel's key is already cached we encrypt synchronously, otherwise we
- * return a promise that derives the key first (UI stays responsive).
+ * its encrypted form before it is sent.
+ *
+ * Key handling is async and never blocks: if the channel's key is already
+ * cached (derived or imported) we encrypt synchronously and send. On a cold
+ * cache we do NOT make the user wait ~10s inside the send — instead we warm the
+ * key in the background and REJECT the send (which keeps the typed text in the
+ * composer), with a toast telling the user to resend once it's ready.
  */
 import { encryptWithKey, MessageTooLongError } from "../core/encrypt";
 import { getCachedKey, deriveKey } from "../core/keycache";
+import { noteError } from "../core/health";
 import { getRandomBytes } from "../crypto/random";
 import { isCloaked } from "../stego/zwc";
 import { settings, chosenPassword } from "../settings";
@@ -17,13 +22,10 @@ function rng(n: number) {
     return getRandomBytes(n, settings().allowInsecureRng);
 }
 
-function abort(e: unknown): Promise<undefined> {
-    if (e instanceof MessageTooLongError) showToast("GoofCrypt: message too long to encrypt — not sent");
-    else {
-        vendetta.logger.error("GoofCrypt encrypt failed", e);
-        showToast("GoofCrypt: encryption failed — not sent");
-    }
-    return Promise.resolve(undefined);
+function fail(msg: string, e?: unknown): Promise<never> {
+    noteError("sendAborts", e);
+    showToast(msg);
+    return Promise.reject(e instanceof Error ? e : new Error(msg));
 }
 
 function patchOne(name: "sendMessage" | "editMessage", messageArgIndex: number): void {
@@ -42,35 +44,22 @@ function patchOne(name: "sendMessage" | "editMessage", messageArgIndex: number):
                 return orig.apply(this, args);
             }
 
-            const cached = getCachedKey(channelId, pw);
-            if (cached) {
+            const key = getCachedKey(channelId, pw);
+            if (key) {
                 try {
-                    message.content = encryptWithKey(message.content, cached, settings().cover, rng);
+                    message.content = encryptWithKey(message.content, key, settings().cover, rng);
                 } catch (e) {
-                    return abort(e);
+                    if (e instanceof MessageTooLongError) return fail("GoofCrypt: message too long to encrypt — not sent (text kept)");
+                    return fail("GoofCrypt: encryption failed — not sent (text kept)", e);
                 }
                 return orig.apply(this, args);
             }
 
-            // Cold: derive key async, then send. UI stays responsive (argon2idAsync yields).
-            const self = this;
-            return (async () => {
-                showToast("GoofCrypt: deriving key (first message in this chat)…");
-                let key: Uint8Array;
-                try {
-                    key = await deriveKey(channelId, pw);
-                } catch (e) {
-                    vendetta.logger.error("GoofCrypt key derive failed", e);
-                    showToast("GoofCrypt: key derivation failed — not sent");
-                    return undefined;
-                }
-                try {
-                    message.content = encryptWithKey(message.content, key, settings().cover, rng);
-                } catch (e) {
-                    return abort(e).then(() => undefined);
-                }
-                return orig.apply(self, args);
-            })();
+            // Cold cache: warm in the background, keep the text, ask to resend.
+            deriveKey(channelId, pw)
+                .then(() => showToast("GoofCrypt: key ready — send again"))
+                .catch((e) => noteError("deriveFails", e));
+            return fail("GoofCrypt: preparing key (~10s). Text kept — send again shortly.");
         }),
     );
 }

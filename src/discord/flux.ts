@@ -9,11 +9,13 @@
 import { decryptWithCachedKeys } from "../core/decrypt";
 import { getCachedKey, deriveKey } from "../core/keycache";
 import { getPasswordList, settings } from "../settings";
+import { noteError } from "../core/health";
 import { isCloaked } from "../stego/zwc";
 import { FluxDispatcher, showToast } from "./metro";
 
 let unpatch: (() => void) | null = null;
 const deriving = new Set<string>(); // messageId guard against duplicate background work
+const decryptedIds = new Set<string>(); // mark-independent re-entrancy guard
 
 function isMarked(content: string): boolean {
     const mark = settings().mark;
@@ -21,10 +23,14 @@ function isMarked(content: string): boolean {
 }
 
 function decryptInPlace(message: any, channelId: string | undefined): void {
-    if (!message?.content || !channelId || isMarked(message.content) || !isCloaked(message.content)) return;
+    if (!message?.content || !channelId) return;
+    const id = String(message.id ?? "");
+    if (id && decryptedIds.has(id)) return; // already handled (robust even if mark is empty)
+    if (isMarked(message.content) || !isCloaked(message.content)) return;
     const res = decryptWithCachedKeys(message.content, channelId, getPasswordList());
     if (res) {
         message.content = settings().mark + res.text;
+        if (id) decryptedIds.add(id);
     } else {
         backgroundDecrypt(message, channelId);
     }
@@ -45,15 +51,17 @@ function backgroundDecrypt(message: any, channelId: string): void {
             if (getCachedKey(channelId, pw)) continue;
             try {
                 await deriveKey(channelId, pw);
-            } catch {
-                /* try next */
+            } catch (e) {
+                noteError("deriveFails", e);
             }
         }
         const res = decryptWithCachedKeys(message.content, channelId, passwords);
         if (res) {
+            if (id) decryptedIds.add(id);
             try {
                 FluxDispatcher().dispatch({
                     type: "MESSAGE_UPDATE",
+                    channelId, // include so the handler can resolve the channel
                     message: { ...message, content: settings().mark + res.text },
                 });
             } catch (e) {

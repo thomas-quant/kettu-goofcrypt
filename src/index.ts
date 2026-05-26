@@ -51,16 +51,17 @@ export default {
             initSettings(store);
             initKeyCache(store);
 
-            // Debug hook for on-device inspection via /eval.
+            // Debug hook for on-device inspection via /eval. Non-secret only
+            // (no raw passwords / storage ref).
             (globalThis as any).__goofcrypt = {
-                raw: () => settings().passwords,
-                list: () => getPasswordList(),
-                set: (v: string) => {
-                    settings().passwords = v;
-                    return settings().passwords;
-                },
-                storeKeys: () => Object.keys(settings()),
-                storageRef: store,
+                version: 1,
+                diag: () => ({
+                    enabled: settings().enabled,
+                    passwords: getPasswordList().length,
+                    rng: secureRngAvailable() ? rngSource() : "none",
+                    selfTest: selfTest(),
+                }),
+                selfTest,
             };
             if (settings().enabled && !secureRngAvailable() && !settings().allowInsecureRng) {
                 settings().enabled = false;

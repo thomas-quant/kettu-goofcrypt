@@ -13,7 +13,9 @@
  * keychain — same exposure as the stored passwords. Pre-shared-password crypto
  * for casual privacy, not a secure enclave.
  */
+import { sha256 } from "@noble/hashes/sha2";
 import { deriveKeyAsync } from "../crypto/argon";
+import { utf8Encode } from "../crypto/deflate";
 import { toBase64, fromBase64 } from "../util/base64";
 
 export interface KeyCacheStore {
@@ -32,10 +34,33 @@ export function initKeyCache(persisted: KeyCacheStore): void {
     if (!store.keys) store.keys = {};
 }
 
-function passwordId(password: string): string {
-    let h = 5381;
-    for (let i = 0; i < password.length; i++) h = ((h << 5) + h + password.charCodeAt(i)) | 0;
-    return (h >>> 0).toString(36);
+/**
+ * Stable, collision-free, non-reversible id for a password within the persisted
+ * key store. Must match the desktop key-derivation tool exactly (it imports this
+ * function) so synced keys land under the same id.
+ */
+export function passwordId(password: string): string {
+    return toBase64(sha256(utf8Encode(password))).slice(0, 22); // 128 bits
+}
+
+/**
+ * Merge desktop-derived keys into the persisted cache so mobile never runs
+ * Argon2 for those channels. Shape: { [channelId]: { [passwordId]: base64key } }.
+ * Returns the number of keys imported.
+ */
+export function importKeys(keysObj: Record<string, Record<string, string>>): number {
+    if (!store) return 0;
+    if (!store.keys) store.keys = {};
+    let n = 0;
+    for (const cid of Object.keys(keysObj)) {
+        const slot = (store.keys[cid] ??= {});
+        const inner = keysObj[cid];
+        for (const pid of Object.keys(inner)) {
+            slot[pid] = inner[pid];
+            n++;
+        }
+    }
+    return n;
 }
 
 /** Synchronous: return a cached key (memory or persisted) or null. Never derives. */

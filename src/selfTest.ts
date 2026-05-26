@@ -5,6 +5,7 @@
  * Argon2) and reports the first failure.
  */
 import { parsePasswords } from "./settings";
+import { passwordId } from "./core/keycache";
 import { conceal, extract, isCloaked } from "./stego/zwc";
 import { toBase64, fromBase64 } from "./util/base64";
 
@@ -32,6 +33,10 @@ export function selfTest(): string | null {
     // 3. base64 round-trip (typed-array indexing).
     const b64 = toBase64(bytes);
     if (!eqBytes(fromBase64(b64), bytes)) return "base64 round-trip mismatch";
+
+    // 4. passwordId determinism + uniqueness (sha256 on-device; key-sync needs this stable).
+    if (passwordId("alpha") !== passwordId("alpha")) return "passwordId nondeterministic";
+    if (passwordId("alpha") === passwordId("beta")) return "passwordId collision";
 
     return null;
 }

@@ -8,6 +8,7 @@ import { aeadDecrypt } from "../crypto/aead";
 import { decompress, utf8Decode } from "../crypto/deflate";
 import { unframe } from "./payload";
 import { extract, isCloaked } from "../stego/zwc";
+import { noteError } from "./health";
 
 export interface DecryptResult {
     text: string; // plaintext WITHOUT the mark prefix
@@ -40,8 +41,11 @@ export function decryptWithCachedKeys(content: string, channelId: string, passwo
             const text = utf8Decode(decompress(plaintext));
             rememberWinner(channelId, password);
             return { text, password };
-        } catch {
-            return null; // authenticated but corrupt
+        } catch (e) {
+            // Authenticated with the right key but decompression failed — a real
+            // red flag (format/version skew with desktop GoofCord), not a miss.
+            noteError("decryptCorrupt", e);
+            return null;
         }
     }
     return null;

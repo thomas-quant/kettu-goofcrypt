@@ -35,6 +35,29 @@ Passwords, cover, and the displayed mark are configured in the plugin's settings
 page. The salt is the Discord channel ID (same as GoofCord), so a key is derived
 once per conversation and cached.
 
+## Key-sync (skip the on-device Argon2 wait)
+
+Argon2id (64 MiB) is fixed by GoofCord's format and takes ~10s the first time per
+chat on mobile (then cached forever). To avoid that wait, derive keys on your
+**desktop** at native speed and import them — mobile then runs **zero Argon2**
+for those chats:
+
+```bash
+# on desktop, in this repo:
+npm run derive -- --passwords "yourPassword" --channels "<channelId1>,<channelId2>"
+```
+(Get a channel ID: Discord Developer Mode → right-click a DM/channel → Copy Channel
+ID.) It prints a base64 bundle. On mobile, paste it via **`/encrypt import:<bundle>`**
+or the "Import keys" field in the plugin settings.
+
+Without key-sync it still works — the first message in each chat just shows a
+"deriving key…" toast and takes ~10s once.
+
+## `/encrypt` command
+
+`on` · `off` · `toggle` · `cycle` (next password) · `status` · `bench` (time Argon2) ·
+`set:<passwords>` (set comma-separated passwords) · `import:<bundle>` (key-sync).
+
 ## Security notes
 
 - This is **pre-shared-password** crypto for casual privacy — not a secure enclave.
