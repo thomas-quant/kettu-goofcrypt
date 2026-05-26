@@ -1,0 +1,1 @@
+const P=window.vendetta.plugins.plugins;const k=Object.keys(P).find(x=>/goofcrypt/i.test(x));try{const r=(0,eval)(`vendetta=>{return `+P[k].js+`}`)(window.vendetta);const p=r&&(r.default||r);return `OK onLoad=`+typeof(p&&p.onLoad);}catch(e){return `THREW: `+(e.stack||e.message||e);}
