@@ -77,37 +77,38 @@ Explicitly excluded. Documented to prevent scope creep.
 
 ## Traceability
 
-Populated during roadmap creation.
-
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SPIKE-01 | — | Pending |
-| SPIKE-02 | — | Pending |
-| SPIKE-03 | — | Pending |
-| SPIKE-04 | — | Pending |
-| GATE-01 | — | Pending |
-| GATE-02 | — | Pending |
-| GATE-03 | — | Pending |
-| GATE-04 | — | Pending |
-| PERF-01 | — | Pending |
-| PERF-02 | — | Pending |
-| PERF-03 | — | Pending |
-| PERF-04 | — | Pending |
-| SYNC-01 | — | Pending |
-| SYNC-02 | — | Pending |
-| SYNC-03 | — | Pending |
-| SYNC-04 | — | Pending |
-| OBS-01 | — | Pending |
-| OBS-02 | — | Pending |
-| COMPAT-01 | — | Pending |
-| NATIVE-01 | — | Pending (conditional) |
-| NATIVE-02 | — | Pending (conditional) |
+| SPIKE-01 | Phase 1 | Pending |
+| SPIKE-02 | Phase 1 | Pending |
+| SPIKE-03 | Phase 1 | Pending |
+| SPIKE-04 | Phase 1 | Pending |
+| GATE-01 | Phase 2 | Pending |
+| GATE-02 | Phase 2 | Pending |
+| GATE-03 | Phase 2 | Pending |
+| GATE-04 | Phase 2 | Pending |
+| COMPAT-01 | Phase 2 | Pending |
+| PERF-01 | Phase 3 | Pending |
+| PERF-02 | Phase 3 | Pending |
+| PERF-03 | Phase 3 | Pending |
+| PERF-04 | Phase 3 | Pending |
+| SYNC-01 | Phase 3 | Pending |
+| SYNC-02 | Phase 3 | Pending |
+| SYNC-03 | Phase 3 | Pending |
+| SYNC-04 | Phase 3 | Pending |
+| OBS-01 | Phase 3 | Pending |
+| OBS-02 | Phase 3 | Pending |
+| NATIVE-01 | Phase 4 (conditional) | Pending (conditional) |
+| NATIVE-02 | Phase 4 (conditional) | Pending (conditional) |
 
 **Coverage:**
 - v1 requirements: 21 total (19 unconditional + 2 conditional on a GREEN spike)
-- Mapped to phases: 0 (roadmap pending)
-- Unmapped: 21 ⚠️
+- Mapped to phases: 21 ✓
+- Unmapped: 0 ✓
+
+> COMPAT-01 is mapped to Phase 2 (where the KDF vector + CI assertion are built) but is a **cross-cutting hard gate** every phase must respect — the CI byte-compat harness must stay green across all phases.
+> Phase 4 (NATIVE-01, NATIVE-02) is **conditional** on a GREEN SPIKE-04 verdict; if the verdict is RED, the milestone ships on Phase 3 alone and these two requirements move to v2 (NATIVE-03 territory).
 
 ---
 *Requirements defined: 2026-05-30*
-*Last updated: 2026-05-30 after initial definition*
+*Last updated: 2026-05-30 after roadmap creation (traceability mapped, 100% coverage)*
