@@ -28,7 +28,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. For every reachable Argon2 candidate, a recorded on-device result states whether it accepts a real ~19-byte channelId salt AND returns a raw 32-byte key (not a PHC string) — or `none reachable` if there are no candidates
   3. The first-encrypt freeze has a written, evidence-backed root cause: yield-count instrumented on-device, a runtime assertion that noble's `nextTick` is the macrotask form, an import-graph audit proving no synchronous `deriveKey` reaches a Discord-thread path, and a check of the `LOAD_MESSAGES_SUCCESS` concurrency storm
   4. A written native-feasibility verdict (GREEN or RED) is committed to planning and explicitly states whether Phase 4 activates
-**Plans**: TBD
+**Plans**: 4 plans
+Plans:
+- [ ] 01-01-PLAN.md — Wave-0 CI foundation: ProbeReport schema + settings fields, harness assertions (round-trip, nextTick macrotask, D-09 vector), sync-derive build guard
+- [ ] 01-02-PLAN.md — Freeze instrumentation: parameter-injected debug yield/timing sampler + assertMacrotaskYield in argon.ts, debug-gated storm/cold-path observation in flux.ts/send.ts
+- [ ] 01-03-PLAN.md — Permanent nativeProbe.ts: surface enumeration + persisted ProbeReport, crash-safe tiered candidate test (D-09 byte-match), onLoad wiring + /encrypt diag verb + on-device evidence capture
+- [ ] 01-04-PLAN.md — GREEN/RED verdict (gated on the D-09 byte-match) + evidence-backed freeze root cause + exact @noble/hashes pin
 
 ### Phase 2: Verification gate (built FIRST)
 **Goal**: Build the single load-bearing safeguard — a byte-equality verification gate — BEFORE any native path can write a real key, so every wrong-32-bytes failure mode (salt length, params, version, output encoding, native correctness, key-sync determinism) is caught loudly in CI or on-device instead of silently poisoning interop.
@@ -70,7 +75,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 (Phase 4 conditional on the
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Spike — probe + freeze diagnosis | 0/TBD | Not started | - |
+| 1. Spike — probe + freeze diagnosis | 0/4 | Planned | - |
 | 2. Verification gate (built FIRST) | 0/TBD | Not started | - |
 | 3. Fallback delivery (primary) | 0/TBD | Not started | - |
 | 4. Native fast-path (conditional) | 0/TBD | Not started | - |
