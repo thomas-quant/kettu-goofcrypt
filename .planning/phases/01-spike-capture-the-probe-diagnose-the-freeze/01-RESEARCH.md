@@ -500,23 +500,27 @@ const CHANNEL = "1234567890123456789"; // snowflake-shaped salt (19 bytes)
 
 **These five `[ASSUMED]` claims should be confirmed during the spike itself** — three of them (A1, A4, A5) are *findings the spike produces*, which is appropriate for a diagnosis spike. A2 is an implementation detail to verify when building the guard.
 
-## Open Questions
+## Open Questions (SPIKE DELIVERABLES — resolved during execution)
 
-1. **Does the armed-flag write survive a hard native crash? (A1)**
+> These are not pre-planning blockers. For a diagnosis spike, several open
+> questions ARE the product: the spike's job is to settle them with on-device
+> evidence. Each is mapped to the plan task that resolves it.
+
+1. **Does the armed-flag write survive a hard native crash? (A1)** — *Resolved by: 01-03 Task 4 (on-device force-quit evidence checkpoint).*
    - What we know: Kettu storage is a reactive proxy that persists JSON; the keycache relies on it surviving restarts.
    - What's unclear: whether a write is on disk *before* the next synchronous statement runs, or flushed asynchronously.
    - Recommendation: Make this an explicit spike sub-task — write flag, force-quit, relaunch, check. Document the answer. If async-only, find Kettu's flush/save call or accept a small pre-call delay.
 
-2. **Is a stable Discord/Hermes build tag reachable for the D-02 staleness trigger? (A5)**
+2. **Is a stable Discord/Hermes build tag reachable for the D-02 staleness trigger? (A5)** — *Resolved by: 01-03 Task 1 (probe scans for it) + Task 4 (on-device confirmation).*
    - What we know: D-02 wants to re-probe when the build tag changes.
    - What's unclear: where the build tag lives (a metro module? a `vendetta` field? `nativeModuleProxy`?).
    - Recommendation: The probe scans for it; if none is reliably reachable, fall back to manual-only re-probe (`/encrypt diag --probe`) and note it in the verdict.
 
-3. **Where does the D-09 noble reference key come from — on-device or desktop? (Claude's discretion)**
+3. **Where does the D-09 noble reference key come from — on-device or desktop? (Claude's discretion)** — *Resolved: on-device (decided here; implemented in 01-03 Task 1).*
    - What we know: the plugin already ships sync `deriveKey`; the harness already uses a 19-byte salt.
    - Recommendation: **On-device** (simplest, self-contained). Derive `deriveKey(VEC_PW, "1234567890123456789")` on-device and compare the candidate's output to it. No desktop round-trip needed for the Phase-1 verdict.
 
-4. **Does the build's `for...of`-over-array assumption hold for the probe's enumeration loops?**
+4. **Does the build's `for...of`-over-array assumption hold for the probe's enumeration loops?** — *Resolved: use array index loops (decided here; enforced in 01-03 Task 1 acceptance + build gate).*
    - What we know: `iterableIsArray:true` covers arrays; Map/Set iteration is unsafe.
    - Recommendation: Use array index loops in all new probe code (shown in Pattern 1). The on-device self-test already guards the array case.
 
