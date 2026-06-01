@@ -56,8 +56,23 @@ function patchOne(name: "sendMessage" | "editMessage", messageArgIndex: number):
             }
 
             // Cold cache: warm in the background, keep the text, ask to resend.
+            // Debug-gated (settings().debugInstrument) cold-path observation: measure
+            // first-key-ready latency — the user's reported "still freezes" send path.
+            // Observe only; the reject-and-resend behavior is unchanged. The discord
+            // layer MAY import settings (the up-graph rule only forbids crypto/core).
+            const debug = settings().debugInstrument;
+            const t0 = debug ? Date.now() : 0;
             deriveKey(channelId, pw)
-                .then(() => showToast("GoofCrypt: key ready — send again"))
+                .then(() => {
+                    if (debug) {
+                        try {
+                            vendetta.logger.log(`GoofCrypt[diag] cold-path first-key-ready: ${Date.now() - t0}ms`);
+                        } catch {
+                            /* logging must never break the send patch */
+                        }
+                    }
+                    showToast("GoofCrypt: key ready — send again");
+                })
                 .catch((e) => noteError("deriveFails", e));
             return fail("GoofCrypt: preparing key (~10s). Text kept — send again shortly.");
         }),

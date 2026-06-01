@@ -17,6 +17,15 @@ let unpatch: (() => void) | null = null;
 const deriving = new Set<string>(); // messageId guard against duplicate background work
 const decryptedIds = new Set<string>(); // mark-independent re-entrancy guard
 
+// Debug-gated (settings().debugInstrument) observation of the
+// LOAD_MESSAGES_SUCCESS concurrency storm: backgroundDecrypt is guarded
+// per-messageId, NOT per-channel, so loading a channel launches N coroutines
+// (Pitfall 3; the per-channel guard FIX is Phase 3). We only MEASURE peak
+// concurrency here — never throw inside the Flux hook (accumulate, mirroring
+// the noteError convention). Zero overhead when debugInstrument is false.
+let activeDerivations = 0;
+let peakDerivations = 0;
+
 function isMarked(content: string): boolean {
     const mark = settings().mark;
     return !!mark && content.startsWith(mark);
@@ -44,6 +53,16 @@ function backgroundDecrypt(message: any, channelId: string): void {
     // Only bother if at least one password's key isn't cached yet.
     if (passwords.every((p) => getCachedKey(channelId, p))) return;
     deriving.add(id);
+    const debug = settings().debugInstrument;
+    if (debug) {
+        activeDerivations++;
+        if (activeDerivations > peakDerivations) peakDerivations = activeDerivations;
+        try {
+            vendetta.logger.log(`GoofCrypt[diag] backgroundDecrypt launch: active=${activeDerivations} peak=${peakDerivations}`);
+        } catch {
+            /* logging must never break the hook */
+        }
+    }
     showToast("GoofCrypt: deriving key to decrypt (one-time for this chat)…");
 
     (async () => {
@@ -68,7 +87,10 @@ function backgroundDecrypt(message: any, channelId: string): void {
                 vendetta.logger.error("GoofCrypt re-dispatch failed", e);
             }
         }
-    })().finally(() => deriving.delete(id));
+    })().finally(() => {
+        deriving.delete(id);
+        if (debug && activeDerivations > 0) activeDerivations--;
+    });
 }
 
 function handle(payload: any): void {
