@@ -4,6 +4,62 @@
  */
 import type { KeyCacheStore } from "./core/keycache";
 
+/**
+ * Result of testing one native-crypto candidate (a reachable native module that
+ * might reproduce the exact Argon2id derivation). Plain-JSON only — no
+ * Uint8Array/Map/Set — so it survives JSON.stringify into plugin.storage and a
+ * restart (D-01 persistability). Stores NO secret material: module names,
+ * booleans, output-shape classification, timing — never key bytes or passwords.
+ */
+export interface CandidateResult {
+    /** Native module / surface name that was probed (e.g. "Sodium", "crypto_pwhash"). */
+    name: string;
+    /** The candidate surface was found and callable. */
+    reachable: boolean;
+    /** The candidate accepted the real 19-byte channelId salt (not just a fixed 16-byte one). */
+    saltAccepted: boolean;
+    /** Shape of the candidate's return value when asked to derive. */
+    outputKind: "raw32" | "phc-string" | "other" | "unknown";
+    /** The candidate's 32 raw bytes byte-matched the noble reference (D-09). */
+    byteMatch: boolean;
+    /** The candidate hard-crashed (detected via the persisted armed flag, D-05). */
+    crashed: boolean;
+    /** JS-level error message if the candidate threw (non-secret). */
+    error?: string;
+    /** Wall-clock derivation time in ms, if measured. */
+    timingMs?: number;
+}
+
+/**
+ * Persisted, restart-survivable snapshot of the on-device native-crypto probe
+ * (SPIKE-01). Plain-JSON only; non-secret only. Written via settings() and read
+ * back after a restart (and surfaced via __goofcrypt.diag / /encrypt status).
+ */
+export interface ProbeReport {
+    /** Schema version of this report (bump when the shape changes). */
+    version: number;
+    /** Date.now() when the probe ran. */
+    timestamp: number;
+    /** Discord/Hermes build tag — for the D-02 staleness check + D-10 device coverage. */
+    buildTag: string | null;
+    /** OS / platform string (D-10 device-coverage record). */
+    platform: string | null;
+    /** Number of nativeModuleProxy keys scanned. */
+    scannedKeys: number;
+    /** nativeModuleProxy key names matching the crypto-ish regex. */
+    cryptoIsh: string[];
+    /** TurboModule probe hits: module name + first method names found. */
+    turboHits: Array<{ name: string; methods: string[] }>;
+    /** metro.findByProps probe results per searched prop. */
+    metroHits: Array<{ prop: string; found: boolean; methods: string[] }>;
+    /** Whether globalThis.crypto.subtle is present. */
+    subtle: boolean;
+    /** Per-candidate derivation-test results (only populated by the manual --test path). */
+    candidates: CandidateResult[];
+    /** Overall verdict: GREEN = a byte-matching native path exists, RED = none, untested = enumeration-only. */
+    verdict: "GREEN" | "RED" | "untested";
+}
+
 export interface Settings extends KeyCacheStore {
     /** Master toggle for ENCRYPTING outgoing messages. Decryption is always on. */
     enabled: boolean;
@@ -17,6 +73,12 @@ export interface Settings extends KeyCacheStore {
     chosenIndex: number;
     /** Opt-in to an INSECURE Math.random nonce if no secure RNG is found. */
     allowInsecureRng: boolean;
+    /** Persisted native-crypto probe report (SPIKE-01); null until the probe runs. */
+    nativeProbe?: ProbeReport | null;
+    /** Crash-safety flag: candidate name set BEFORE a native call, cleared after (D-05). */
+    nativeProbeArmed?: string | null;
+    /** Enable zero-overhead-off Argon2 instrumentation (D-08); off by default. */
+    debugInstrument?: boolean;
 }
 
 export const DEFAULTS: Settings = {
@@ -27,6 +89,9 @@ export const DEFAULTS: Settings = {
     chosenIndex: 0,
     allowInsecureRng: false,
     keys: {},
+    nativeProbe: null,
+    nativeProbeArmed: null,
+    debugInstrument: false,
 };
 
 let store: Settings | null = null;
