@@ -57,8 +57,38 @@ const result = await build({
     jsxFragment: "React.Fragment",
     plugins: [nobleMacrotaskYield],
     logLevel: "info",
+    metafile: true,
 });
 const bundled = result.outputFiles[0].text;
+
+// D-07 sync-derive build guard. The sync 64 MiB Argon2id `deriveKey`
+// (crypto/argon.ts) is only value-imported by core/stegcloak.ts. If any
+// src/discord/* module ever transitively VALUE-imports core/stegcloak.ts, the
+// freeze-causing sync derive would be reachable from a hot path again. esbuild
+// erases `import type {...}` before the metafile, so core/encrypt.ts's
+// `import type { RandomBytes } from "./stegcloak"` does NOT appear here and
+// won't false-trip. This records the completed import-graph audit as a
+// permanent, un-regressable structural invariant. (Node, so for...of is fine —
+// but index loops match the Hermes-safe convention used elsewhere.)
+const meta = result.metafile;
+function reachesSyncDerive(entry, seen = new Set()) {
+    if (seen.has(entry)) return false;
+    seen.add(entry);
+    if (/src[\\/]core[\\/]stegcloak\.ts$/.test(entry)) return true;
+    const imports = meta.inputs[entry]?.imports ?? [];
+    for (let i = 0; i < imports.length; i++) {
+        if (reachesSyncDerive(imports[i].path, seen)) return true;
+    }
+    return false;
+}
+const discordEntries = Object.keys(meta.inputs).filter((p) => /src[\\/]discord[\\/]/.test(p));
+for (let i = 0; i < discordEntries.length; i++) {
+    if (reachesSyncDerive(discordEntries[i])) {
+        throw new Error(
+            "sync-derive leak: " + discordEntries[i] + " transitively imports core/stegcloak.ts (sync 64MiB derive) — would re-freeze the UI",
+        );
+    }
+}
 
 // 2. Down-level to ES5 so the bundle contains no `class` syntax (Hermes eval).
 const { code: lowered } = await transform(bundled, {
