@@ -104,3 +104,58 @@ export async function benchOnce(): Promise<number> {
     await argon2idAsync(utf8Encode("benchpassword"), utf8Encode("benchsaltvalue"), ASYNC_OPTS);
     return Date.now() - t0;
 }
+
+/**
+ * Enriched bench readout for the /encrypt diag/bench command (D-06b). Runs ONE
+ * derivation under the same setInterval(0) macrotask sampler as
+ * deriveKeyAsyncInstrumented and returns a LOCKED contract that Plan 03's bench
+ * wiring binds against:
+ *   - totalMs: wall-clock derivation time
+ *   - firstYieldMs: latency to the first fired macrotask (front-loaded first pass)
+ *   - longestBlockMs: max gap between consecutive samples ⇒ the worst UI stall
+ *   - yieldCount: number of macrotasks that fired (zero across a multi-second
+ *     derivation ⇒ the JS thread was starved ⇒ effectively frozen)
+ *   - ok / form: spread from assertMacrotaskYield() (the caret-regression tripwire)
+ *
+ * Still takes no settings — argon.ts is crypto layer and only measures here.
+ * benchOnce()'s `Promise<number>` signature is left untouched so existing callers
+ * do not break.
+ */
+export async function benchOnceDetailed(): Promise<{
+    totalMs: number;
+    firstYieldMs: number;
+    longestBlockMs: number;
+    yieldCount: number;
+    ok: boolean;
+    form: string;
+}> {
+    const t0 = Date.now();
+    let firstYield = -1;
+    let last = 0;
+    let longestBlock = 0;
+    const samples: number[] = [];
+    const id = setInterval(() => {
+        const t = Date.now() - t0;
+        if (firstYield < 0) firstYield = t;
+        const gap = t - last;
+        if (gap > longestBlock) longestBlock = gap;
+        last = t;
+        samples.push(t);
+    }, 0);
+    try {
+        await argon2idAsync(utf8Encode("benchpassword"), utf8Encode("benchsaltvalue"), ASYNC_OPTS);
+        const totalMs = Date.now() - t0;
+        // Account for the tail block between the last sample and completion.
+        const tailGap = totalMs - last;
+        if (tailGap > longestBlock) longestBlock = tailGap;
+        return {
+            totalMs,
+            firstYieldMs: firstYield,
+            longestBlockMs: longestBlock,
+            yieldCount: samples.length,
+            ...assertMacrotaskYield(),
+        };
+    } finally {
+        clearInterval(id);
+    }
+}
