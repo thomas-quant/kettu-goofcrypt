@@ -25,9 +25,9 @@ See: .planning/PROJECT.md (updated 2026-05-30)
 ## Current Position
 
 Phase: 01 (spike-capture-the-probe-diagnose-the-freeze) — EXECUTING
-Plan: 1 of 4
-Status: Executing Phase 01
-Last activity: 2026-06-01 -- Phase 01 execution started
+Plan: 3 of 4 (Tasks 1-3 done; PAUSED at Task 4 human-verify checkpoint)
+Status: Plan 01-03 awaiting on-device evidence (BLOCKING checkpoint:human-verify)
+Last activity: 2026-06-01 -- Plan 01-03 Tasks 1-3 committed (78aea50, 0cfc271, 5b2f3f0); paused at on-device probe verification
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -88,6 +88,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-30T17:19:59.897Z
-Stopped at: Phase 1 context gathered
-Resume file: .planning/phases/01-spike-capture-the-probe-diagnose-the-freeze/01-CONTEXT.md
+Last session: 2026-06-01
+Stopped at: Plan 01-03 Task 4 — BLOCKING human-verify checkpoint (on-device probe evidence)
+Resume file: .planning/phases/01-spike-capture-the-probe-diagnose-the-freeze/01-03-PLAN.md
+Resume note: Build the plugin (npm run build → site/index.js, gitignored) and install on the PRIMARY device. Capture: (1) ProbeReport restart-survival via __goofcrypt.diag() / /encrypt status; (2) build-tag captured vs null (A5); (3) /encrypt diag --test per-candidate {reachable,saltAccepted,outputKind,byteMatch,timingMs,crashed} or "none reachable"; (4) armed-flag crash survival + A1 storage-flush finding; (5) /encrypt bench freeze numbers (ticks/first-tick/longest-block/total + macrotask form) + LOAD_MESSAGES_SUCCESS storm concurrency. Paste back as resume signal — Plan 04 consumes verbatim. Do NOT write 01-03-SUMMARY.md until this evidence lands.
