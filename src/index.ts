@@ -11,9 +11,44 @@ import { detectRng, secureRngAvailable, rngSource } from "./crypto/random";
 import { patchSend, unpatchSend } from "./discord/send";
 import { patchFlux, unpatchFlux } from "./discord/flux";
 import { registerCommands, unregisterCommands } from "./discord/commands";
+import { runProbe, reconcileArmedFlag } from "./discord/nativeProbe";
 import { showToast } from "./discord/metro";
 import { selfTest } from "./selfTest";
 import { SettingsComponent } from "./ui/Settings";
+
+/**
+ * On-load native-crypto probe wiring (enumeration-only, stale-gated). Runs after
+ * settings/keycache init so settings() is ready.
+ *   - First reconciles a still-set armed flag (D-05): a candidate that crashed
+ *     the app last run is marked crashed/unsafe.
+ *   - Then re-runs enumeration ONLY when the stored report is missing OR its
+ *     buildTag differs from the currently-detected one (D-02 staleness trigger).
+ * It NEVER invokes native crypto on load (D-03) — candidate tests run solely via
+ * the manual /encrypt diag --test verb.
+ */
+function maybeRunProbe(): void {
+    const existing = settings().nativeProbe;
+    if (existing) reconcileArmedFlag(existing);
+    const currentTag = enumerateBuildTag();
+    const stale = !existing || existing.buildTag !== currentTag;
+    if (stale) runProbe();
+}
+
+/**
+ * Cheap build-tag read mirroring nativeProbe's detector, used only for the
+ * staleness comparison (D-02). Kept local + guarded; if no tag is reachable it
+ * returns null and the stored report's null buildTag makes the probe re-run only
+ * when the report is missing (A5 manual-only re-probe fallback).
+ */
+function enumerateBuildTag(): string | null {
+    try {
+        const v: any = (globalThis as any).vendetta;
+        const ci = v?.metro?.common?.constants?.ClientInfoModule || v?.metro?.findByProps?.("Build", "Version");
+        const tag = ci?.Build || ci?.Version || ci?.OTABuild;
+        if (tag) return String(tag);
+    } catch {}
+    return null;
+}
 
 function SettingsScreen() {
     const React: any = vendetta.metro.common.React;
@@ -54,12 +89,16 @@ export default {
             // Debug hook for on-device inspection via /eval. Non-secret only
             // (no raw passwords / storage ref).
             (globalThis as any).__goofcrypt = {
-                version: 1,
+                // v2: diag() now surfaces the persisted native-crypto ProbeReport
+                // (non-secret only — module names + booleans + timing; NO key
+                // bytes, NO passwords, per the non-secret rule above).
+                version: 2,
                 diag: () => ({
                     enabled: settings().enabled,
                     passwords: getPasswordList().length,
                     rng: secureRngAvailable() ? rngSource() : "none",
                     selfTest: selfTest(),
+                    nativeProbe: settings().nativeProbe ?? null,
                 }),
                 selfTest,
             };
@@ -68,6 +107,12 @@ export default {
                 showToast("GoofCrypt: no secure RNG found — encryption disabled");
             }
         });
+
+        // Enumeration-only native-crypto probe (D-03), wired AFTER settings/keycache
+        // init so settings() is ready. Stale-gated (D-02) + armed-flag reconcile
+        // (D-05); never invokes native crypto on load. Isolated in safe() so a
+        // probe failure cannot break plugin init.
+        safe("native-probe", maybeRunProbe);
 
         safe("decrypt-hook", patchFlux);
         safe("send-patch", patchSend);
