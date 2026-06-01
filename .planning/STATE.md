@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-31T17:29:52.680Z"
-last_activity: 2026-05-31 -- Phase 01 planning complete
+last_updated: "2026-06-01T01:48:08.710Z"
+last_activity: 2026-06-01 -- Phase 01 execution started
 progress:
   total_phases: 4
   completed_phases: 0
@@ -20,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-30)
 
 **Core value:** Byte-exact interop with GoofCord/stegcloak-rs is non-negotiable; kill the first-encrypt freeze without ever sacrificing it.
-**Current focus:** Phase 1 — Spike (capture the probe + diagnose the freeze)
+**Current focus:** Phase 01 — spike-capture-the-probe-diagnose-the-freeze
 
 ## Current Position
 
-Phase: 1 of 4 (Spike — capture the probe + diagnose the freeze)
-Plan: 0 of TBD in current phase
-Status: Ready to execute
-Last activity: 2026-05-31 -- Phase 01 planning complete
+Phase: 01 (spike-capture-the-probe-diagnose-the-freeze) — EXECUTING
+Plan: 1 of 4
+Status: Executing Phase 01
+Last activity: 2026-06-01 -- Phase 01 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
