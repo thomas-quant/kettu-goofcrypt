@@ -11,6 +11,7 @@
  * cached, never run per-message.
  */
 import { argon2id, argon2idAsync } from "@noble/hashes/argon2";
+import { nextTick } from "@noble/hashes/utils"; // the build-patched macrotask symbol
 import { utf8Encode } from "./deflate";
 
 export const KEY_LENGTH = 32;
@@ -39,6 +40,62 @@ const ASYNC_OPTS = { ...OPTS, asyncTick: 50 };
 
 export async function deriveKeyAsync(password: string, channelId: string): Promise<Uint8Array> {
     return argon2idAsync(utf8Encode(password), utf8Encode(channelId), ASYNC_OPTS);
+}
+
+/**
+ * On-device runtime tripwire for the @noble/hashes caret regression (D-06).
+ *
+ * noble's `argon2idAsync` yields the JS thread via `await nextTick()`. The build
+ * (scripts/build.mjs) rewrites that symbol from the upstream empty-async-arrow
+ * (a MICROTASK — does NOT yield to the render loop, so the UI freezes) to a
+ * `setTimeout`-backed MACROTASK form. A future `^1.7.1 → 2.x` bump could revert
+ * it to the microtask form and silently re-freeze. This asserts the runtime form
+ * is NOT the empty-async-arrow microtask shape — the on-device counterpart to the
+ * Plan 01 CI source-literal assertion.
+ */
+export function assertMacrotaskYield(): { ok: boolean; form: string } {
+    const src = String(nextTick);
+    // Empty async arrow `async () => {}` is the upstream microtask form (regressed).
+    const isMicrotask = /async\s*\(\s*\)\s*=>\s*\{\s*\}/.test(src);
+    return { ok: !isMicrotask, form: src.slice(0, 80) };
+}
+
+/**
+ * Debug-flagged instrumented wrapper over the REAL deriveKeyAsync (D-06a / D-08).
+ *
+ * `debug` is a plain PARAMETER, never read from the settings module — argon.ts
+ * is crypto layer and must not import settings (that would create a forbidden
+ * crypto→settings up-graph edge). This mirrors random.ts's `rng: RandomBytes`
+ * dependency-injection-by-parameter convention. When `debug` is false this
+ * early-returns the plain `deriveKeyAsync` result with zero added overhead.
+ *
+ * A4 caveat: noble's internal `await nextTick()` count is NOT observable from
+ * outside its closure. The `setInterval(0)` sampler instead proves whether
+ * macrotasks FIRE during derivation (UI alive) versus zero samples across a
+ * multi-second derivation (the JS thread is starved ⇒ effectively frozen).
+ */
+export async function deriveKeyAsyncInstrumented(password: string, channelId: string, debug = false) {
+    if (!debug) return deriveKeyAsync(password, channelId);
+    const t0 = Date.now();
+    let firstYield = -1;
+    const samples: number[] = [];
+    const id = setInterval(() => {
+        const t = Date.now() - t0;
+        if (firstYield < 0) firstYield = t;
+        samples.push(t);
+    }, 0);
+    try {
+        const key = await deriveKeyAsync(password, channelId);
+        return {
+            key,
+            totalMs: Date.now() - t0,
+            firstYieldMs: firstYield,
+            yieldSamples: samples.length,
+            ...assertMacrotaskYield(),
+        };
+    } finally {
+        clearInterval(id);
+    }
 }
 
 /** Time one async derivation (ms), for the /encrypt bench command. */
