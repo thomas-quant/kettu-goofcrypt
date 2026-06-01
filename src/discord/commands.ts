@@ -6,7 +6,8 @@
 import { settings, chosenPassword, cyclePassword, maskPassword, getPasswordList } from "../settings";
 import { secureRngAvailable, rngSource } from "../crypto/random";
 import { deriveKey, isCached, importKeys } from "../core/keycache";
-import { benchOnce } from "../crypto/argon";
+import { benchOnceDetailed } from "../crypto/argon";
+import { runProbe, testCandidate, probeSummary, candidateAdapters } from "./nativeProbe";
 import { healthSummary } from "../core/health";
 import { fromBase64 } from "../util/base64";
 import { utf8Decode } from "../crypto/deflate";
@@ -32,14 +33,22 @@ export function registerCommands(): void {
     dispose = vendetta.commands.registerCommand({
         name: "encrypt",
         displayName: "encrypt",
-        description: "GoofCrypt: on | off | toggle | cycle | status | bench",
-        displayDescription: "GoofCrypt: on | off | toggle | cycle | status | bench",
+        description: "GoofCrypt: on | off | toggle | cycle | status | bench | diag",
+        displayDescription: "GoofCrypt: on | off | toggle | cycle | status | bench | diag",
         options: [
             {
                 name: "action",
                 displayName: "action",
-                description: "on | off | toggle | cycle | status | bench",
-                displayDescription: "on | off | toggle | cycle | status | bench",
+                description: "on | off | toggle | cycle | status | bench | diag",
+                displayDescription: "on | off | toggle | cycle | status | bench | diag",
+                type: STRING,
+                required: false,
+            },
+            {
+                name: "diag",
+                displayName: "diag",
+                description: "probe (enumerate native surface) | test (run native candidate tests — manual only)",
+                displayDescription: "probe (enumerate native surface) | test (run native candidate tests — manual only)",
                 type: STRING,
                 required: false,
             },
@@ -88,11 +97,63 @@ export function registerCommands(): void {
 
             const action = (args.find((a) => a.name === "action")?.value ?? "toggle").toLowerCase();
 
+            // Native-crypto diagnostics (SPIKE-01/02). The `diag` sub-arg picks
+            // the mode; `action: "diag"` with no sub-arg defaults to enumeration.
+            const diagArg = args.find((a) => a.name === "diag")?.value?.toLowerCase();
+            if (diagArg !== undefined || action === "diag") {
+                const mode = diagArg ?? "probe";
+                if (mode === "test") {
+                    // The ONLY caller of testCandidate (D-05). Enumerate-or-reuse
+                    // the persisted report, then run each reachable candidate
+                    // under the armed-flag protection. Fire-and-forget so the UI
+                    // never blocks; toast per-candidate results.
+                    showToast("GoofCrypt: testing native candidates (manual probe)…");
+                    const report = settings().nativeProbe ?? runProbe();
+                    const adapters = candidateAdapters(report);
+                    if (adapters.length === 0) {
+                        return void showToast("GoofCrypt: none reachable — no native Argon2 candidate to test");
+                    }
+                    // Sequential per-candidate test via a fire-and-forget .then
+                    // chain (NOT a for+await async IIFE — that lowers to a
+                    // regenerator generator under swc es5, which Hermes eval
+                    // rejects). Each step toasts its result, then schedules next.
+                    const runNext = (i: number): void => {
+                        if (i >= adapters.length) return;
+                        testCandidate(adapters[i].name, adapters[i].fn)
+                            .then((r) =>
+                                showToast(
+                                    `GoofCrypt ${r.name}: reach ${r.reachable} salt ${r.saltAccepted} ` +
+                                        `out ${r.outputKind} match ${r.byteMatch} crash ${r.crashed}` +
+                                        (r.timingMs != null ? ` ${r.timingMs}ms` : "") +
+                                        (r.error ? ` err ${r.error}` : ""),
+                                ),
+                            )
+                            .catch((e) => showToast(`GoofCrypt ${adapters[i].name}: test error ${e?.message ?? e}`))
+                            .then(() => runNext(i + 1));
+                    };
+                    runNext(0);
+                    return;
+                }
+                // Default: enumeration ONLY — MUST NOT invoke native crypto.
+                runProbe();
+                return void showToast("GoofCrypt diag" + probeSummary());
+            }
+
             switch (action) {
                 case "bench":
                     showToast("GoofCrypt: timing Argon2 (this is the per-chat cost)…");
-                    benchOnce()
-                        .then((ms) => showToast(`GoofCrypt: Argon2 took ${ms} ms`))
+                    // Locked benchOnceDetailed contract (Plan 01-02 Task 2):
+                    // { totalMs, firstYieldMs, longestBlockMs, yieldCount, ok, form }.
+                    // yieldCount 0 across a multi-second derive ⇒ thread-starved.
+                    benchOnceDetailed()
+                        .then((r) =>
+                            showToast(
+                                `GoofCrypt Argon2: ${r.totalMs}ms total · first-tick ${r.firstYieldMs}ms · ` +
+                                    `longest-block ${r.longestBlockMs}ms · ticks ${r.yieldCount}` +
+                                    (r.yieldCount === 0 ? " (THREAD-STARVED)" : "") +
+                                    ` · macrotask ${r.ok ? "ok" : "REGRESSED"}`,
+                            ),
+                        )
                         .catch((e) => showToast("GoofCrypt bench error: " + (e?.message ?? e)));
                     break;
                 case "on":
@@ -120,7 +181,8 @@ export function registerCommands(): void {
                         `GoofCrypt: ${settings().enabled ? "ON" : "OFF"} · ${getPasswordList().length} pw ` +
                             `(raw ${settings().passwords.length} chars) · pw ${maskPassword(chosenPassword())} · ` +
                             `RNG ${secureRngAvailable() ? rngSource() : "none"}` +
-                            healthSummary(),
+                            healthSummary() +
+                            probeSummary(),
                     );
                     break;
                 default: // toggle
