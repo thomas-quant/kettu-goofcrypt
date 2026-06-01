@@ -9,7 +9,14 @@ import { passwordId } from "./core/keycache";
 import { conceal, extract, isCloaked } from "./stego/zwc";
 import { toBase64, fromBase64 } from "./util/base64";
 
-function eqBytes(a: Uint8Array, b: Uint8Array): boolean {
+/**
+ * Index-loop byte comparator (Hermes-safe). Exported so the discord-layer probe
+ * (src/discord/nativeProbe.ts) can reuse the EXACT comparison the harness uses
+ * for the D-09 on-device byte-match — selfTest is a top-level src/ cross-cutting
+ * utility, NOT in core/crypto, so importing it from discord is a sanctioned
+ * sibling-utility edge, not an up-graph layering violation.
+ */
+export function eqBytes(a: Uint8Array, b: Uint8Array): boolean {
     if (a.length !== b.length) return false;
     for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
     return true;
