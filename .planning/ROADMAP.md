@@ -39,7 +39,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 01-02-PLAN.md — Freeze instrumentation: parameter-injected debug yield/timing sampler + assertMacrotaskYield in argon.ts, debug-gated storm/cold-path observation in flux.ts/send.ts
+- [x] 01-02-PLAN.md — Freeze instrumentation: parameter-injected debug yield/timing sampler + assertMacrotaskYield in argon.ts, debug-gated storm/cold-path observation in flux.ts/send.ts
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -98,7 +98,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 (Phase 4 conditional on the
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Spike — probe + freeze diagnosis | 1/4 | In Progress|  |
+| 1. Spike — probe + freeze diagnosis | 2/4 | In Progress|  |
 | 2. Verification gate (built FIRST) | 0/TBD | Not started | - |
 | 3. Fallback delivery (primary) | 0/TBD | Not started | - |
 | 4. Native fast-path (conditional) | 0/TBD | Not started | - |
