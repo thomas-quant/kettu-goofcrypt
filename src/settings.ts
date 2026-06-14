@@ -99,7 +99,15 @@ let store: Settings | null = null;
 export function initSettings(s: Settings): void {
     store = s;
     for (const k of Object.keys(DEFAULTS) as (keyof Settings)[]) {
-        if (store[k] === undefined) (store as any)[k] = (DEFAULTS as any)[k];
+        const d = (DEFAULTS as any)[k];
+        // Never write null/undefined into Kettu's reactive plugin.storage proxy.
+        // It wraps object-typed values with `new Proxy(value)` for reactivity, and
+        // because `typeof null === "object"` that becomes `new Proxy(null)` →
+        // "new proxy target must be an object" (on-device Hermes only; Node CI has
+        // no such proxy so this never shows up in the harness). A null/undefined
+        // default just stays absent — every read site already treats absent as
+        // "not set yet" (`if (x)`, `x ?? null`). SPIKE-03 on-device finding.
+        if (store[k] === undefined && d != null) (store as any)[k] = d;
     }
 }
 

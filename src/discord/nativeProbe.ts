@@ -245,7 +245,11 @@ export function reconcileArmedFlag(report: ProbeReport): void {
     }
     try {
         settings().nativeProbe = report;
-        settings().nativeProbeArmed = null;
+        // Clear with `undefined`, NOT null: Kettu's storage proxy wraps object-typed
+        // values with new Proxy(), and `typeof null === "object"` makes that throw
+        // "new proxy target must be an object" on-device. undefined is a primitive,
+        // serializes to an absent key (= disarmed), and persists via the set trap.
+        settings().nativeProbeArmed = undefined;
     } catch (e) {
         noteError("deriveFails", e);
     }
@@ -375,8 +379,10 @@ export async function testCandidate(name: string, fn: NativeArgonCandidate): Pro
         result.error = (e as Error)?.message ?? String(e); // JS throw → caught, not fatal
     } finally {
         // 4. CLEAR the flag — reached only if the call did NOT hard-crash the app.
+        // `undefined` not null: Kettu's storage proxy throws "new proxy target must
+        // be an object" on null (typeof null === "object" → new Proxy(null)).
         try {
-            settings().nativeProbeArmed = null;
+            settings().nativeProbeArmed = undefined;
         } catch {
             /* ignore */
         }

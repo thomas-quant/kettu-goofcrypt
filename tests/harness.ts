@@ -18,6 +18,7 @@ import { conceal, extract } from "../src/stego/zwc";
 import { nextTick } from "@noble/hashes/utils";
 import { deriveKey } from "../src/crypto/argon";
 import type { ProbeReport } from "../src/settings";
+import { initSettings, DEFAULTS } from "../src/settings";
 
 const rng = (n: number) => {
     const b = new Uint8Array(n);
@@ -235,6 +236,56 @@ console.log("\n[9] D-09 reference-key vector (SPIKE-04 honest-verdict CI target)
         ourReveal(sc.hide("x", VEC_PW, CHANNEL, "cover"), VEC_PW, CHANNEL) === "x",
         "stegcloak-rs round-trip failed for VEC_PW",
     );
+}
+
+console.log("\n[10] Kettu null-hostile storage proxy (SPIKE-03 on-device init-crash guard)");
+{
+    // Faithfully mimics Kettu's reactive plugin.storage: object-typed values are
+    // wrapped with `new Proxy()` for reactivity. Because `typeof null === "object"`,
+    // an unguarded wrap of null throws "new proxy target must be an object" — the
+    // exact on-device init crash a user hit. Node CI has no such proxy, so without
+    // this stub the whole class of bug is invisible off-device.
+    function makeKettuLikeStorage(): any {
+        const handler: ProxyHandler<any> = {
+            get(t, k) { return (t as any)[k]; },
+            set(t, k, v) {
+                const wrapped = typeof v === "object" ? new Proxy(v, handler) : v; // new Proxy(null) throws
+                (t as any)[k] = wrapped;
+                return true;
+            },
+        };
+        return new Proxy({}, handler);
+    }
+
+    let initThrew = "";
+    try {
+        initSettings(makeKettuLikeStorage());
+    } catch (e) {
+        initThrew = (e as Error)?.message ?? String(e);
+    }
+    check("initSettings writes no null into a null-hostile reactive proxy", initThrew === "", initThrew);
+
+    // The runtime disarm path (nativeProbe.ts) must clear the armed flag with a
+    // primitive, never null — assigning null would re-trip the same proxy crash.
+    let clearThrew = "";
+    try {
+        const s = makeKettuLikeStorage();
+        initSettings(s);
+        s.nativeProbeArmed = undefined; // disarm pattern used after a candidate call
+    } catch (e) {
+        clearThrew = (e as Error)?.message ?? String(e);
+    }
+    check("disarm via undefined does not crash the storage proxy", clearThrew === "", clearThrew);
+
+    // Sanity: a literal `= null` assignment WOULD crash that proxy (documents why).
+    let nullThrew = false;
+    try {
+        const s = makeKettuLikeStorage();
+        s.nativeProbeArmed = null;
+    } catch {
+        nullThrew = true;
+    }
+    check("control: assigning null to the proxy does throw (mechanism confirmed)", nullThrew);
 }
 
 console.log(`\n${failed === 0 ? "✅" : "❌"} harness: ${passed} passed, ${failed} failed\n`);
