@@ -457,3 +457,50 @@ export function probeSummary(): string {
     }
     return ` · probe: ${report.verdict}, ${report.candidates.length} cand, ${crashed} crashed`;
 }
+
+/**
+ * Full, copyable digest of the persisted ProbeReport — the complete SPIKE-01
+ * enumeration evidence (what native-crypto surface actually exists on-device),
+ * formatted for a Clyde bot message. Lists are capped so the message stays under
+ * Discord's 2000-char limit. Read-only; never invokes native crypto.
+ */
+export function probeDigest(): string {
+    let r: ProbeReport | null | undefined;
+    try {
+        r = settings().nativeProbe;
+    } catch {
+        return "probe: (settings unavailable)";
+    }
+    if (!r) return "probe: none yet — pick action “diag: probe (enumerate)” to run it";
+    const cap = (a: string[], n: number): string =>
+        a.length === 0 ? "none" : a.slice(0, n).join(", ") + (a.length > n ? ` …(+${a.length - n})` : "");
+    const turbo =
+        r.turboHits.length === 0
+            ? "none"
+            : r.turboHits
+                  .slice(0, 12)
+                  .map((t) => `${t.name}[${t.methods.slice(0, 6).join("|")}]`)
+                  .join("; ") + (r.turboHits.length > 12 ? ` …(+${r.turboHits.length - 12})` : "");
+    const metro = r.metroHits.filter((m) => m.found).map((m) => m.prop);
+    const cands =
+        r.candidates.length === 0
+            ? "none"
+            : r.candidates
+                  .map(
+                      (c) =>
+                          `${c.name}: reach=${c.reachable} salt=${c.saltAccepted} out=${c.outputKind} ` +
+                          `match=${c.byteMatch} crash=${c.crashed}` +
+                          (c.timingMs != null ? ` ${c.timingMs}ms` : "") +
+                          (c.error ? ` err=${c.error}` : ""),
+                  )
+                  .join("\n  ");
+    return (
+        `verdict: ${r.verdict}\n` +
+        `build: ${r.buildTag ?? "null"} · platform: ${r.platform ?? "null"}\n` +
+        `scannedKeys: ${r.scannedKeys} · crypto.subtle: ${r.subtle}\n` +
+        `cryptoIsh (${r.cryptoIsh.length}): ${cap(r.cryptoIsh, 40)}\n` +
+        `turboHits (${r.turboHits.length}): ${turbo}\n` +
+        `metroHits found: ${metro.length ? metro.join(", ") : "none"}\n` +
+        `candidates (${r.candidates.length}):\n  ${cands}`
+    );
+}

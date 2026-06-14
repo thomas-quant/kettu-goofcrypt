@@ -7,7 +7,7 @@ import { settings, chosenPassword, cyclePassword, maskPassword, getPasswordList 
 import { secureRngAvailable, rngSource } from "../crypto/random";
 import { deriveKey, isCached, importKeys } from "../core/keycache";
 import { benchOnceDetailed } from "../crypto/argon";
-import { runProbe, testCandidate, probeSummary, candidateAdapters } from "./nativeProbe";
+import { runProbe, testCandidate, probeSummary, probeDigest, candidateAdapters } from "./nativeProbe";
 import { healthSummary } from "../core/health";
 import { fromBase64 } from "../util/base64";
 import { utf8Decode } from "../crypto/deflate";
@@ -158,9 +158,11 @@ export function registerCommands(): void {
                     runNext(0);
                     return;
                 }
-                // probe: enumeration ONLY — MUST NOT invoke native crypto.
+                // probe: enumeration ONLY — MUST NOT invoke native crypto. Posts the
+                // FULL copyable enumeration digest (SPIKE-01 evidence), not just the
+                // one-line summary.
                 runProbe();
-                return void reply(channelId, "**GoofCrypt diag**" + probeSummary());
+                return void reply(channelId, "**GoofCrypt probe**\n" + probeDigest());
             }
 
             switch (action) {
