@@ -46,8 +46,9 @@ repeated full-suite, and this independent rerun now pass without weakening the
 30-second per-Worker-job production bound or any assertion.
 
 All six must-have truths, all three artifacts, and all seven key links pass.
-Physical Android/iOS release validation remains correctly pending and therefore
-`human_needed: true`; it is not an automated implementation gap.
+Physical Android release validation remains correctly pending and therefore
+`human_needed: true`; iOS is not applicable because Kettu has no iOS client.
+This is not an automated implementation gap.
 
 ## Commit and scope audit
 
@@ -79,7 +80,7 @@ Physical Android/iOS release validation remains correctly pending and therefore
 | 3 | Pass | Only external auth/settings/OAuth/Mongo seams are in-memory. Touching auth and settings writes/deletes/revokes throw; read-only auth and authenticated blob load occur once with zero writes. The fetch adapter calls `app.fetch` directly, there is no database/network, the test is bounded at 90 seconds, and nested `finally` guarantees service/pool close even if client abort fails. |
 | 4 | Pass | No production crypto/KDF/stego/message/server, fixture, dependency, lockfile, or reference change exists. The new test imports production primitives rather than implementing Argon, decoder, AEAD, compression, framing, ZWC, or base64. Bridge, mobile, build/typecheck, focused server, and full server commands are green. The only server delta is the separately authorized test-harness timeout. |
 | 5 | Pass | The ledger contains exactly 16 ordered architecture rows and 12 automated-case rows with commands and named direct evidence. Wrong key, passwordless, busy, offline, stale, malformed ZWC, rapid events, and restart cache hits cite the existing direct suites; no duplicate negative crypto/test implementation was added. It accurately distinguishes production server baseline `0af697e` from test-evidence HEAD `dc44752`. |
-| 6 | Pass | The ledger contains 14 physical scenarios with separate Android/iOS columns and 28 `PENDING_DEVICE` platform cells. It covers authentication, session-only key, rapid receive/send, wrong key, missing passwords, unavailability, restart cache, redirects, timeout/config/unload aborts, actual response bound mode, and missing capabilities. It contains no device-pass or shipment-ready claim and retains `AUTOMATED_PASS / DEVICE_PENDING`. |
+| 6 | Pass | The ledger contains 14 physical scenarios with separate applicability columns: all 14 Android cells are `PENDING_DEVICE`, and all 14 iOS cells are `NOT_APPLICABLE` because Kettu has no iOS client. It covers authentication, session-only key, rapid receive/send, wrong key, missing passwords, unavailability, restart cache, redirects, timeout/config/unload aborts, actual response bound mode, and missing capabilities. It contains no device-pass or shipment-ready claim and retains `AUTOMATED_PASS / DEVICE_PENDING`. |
 
 **Score:** 6/6 truths verified; 0 behavior-unverified.
 
@@ -89,7 +90,7 @@ Physical Android/iOS release validation remains correctly pending and therefore
 |---|:---:|---|
 | `tests/remoteKdfStage5.test.mjs` | Pass | Executable real Worker/full-app/strict-client/mobile-pipeline bridge containing `createKdfWorkerPool`, exact fixture and slot assertions, bounded cleanup, and no secret sink. |
 | `package.json` | Pass | Contains the discoverable opt-in `test:remote-kdf-stage5` command; standalone `test` and all dependencies remain unchanged. |
-| `docs/REMOTE_KDF_ACCEPTANCE.md` | Pass | Substantive 16-row architecture, 12-row automated, and Android/iOS pending-device ledger. It records the exact current commits, test-only stabilization delta, repeated full-suite passes, commands, and scope gates. |
+| `docs/REMOTE_KDF_ACCEPTANCE.md` | Pass | Substantive 16-row architecture, 12-row automated, and Android-pending/iOS-not-applicable device ledger. It records the exact current commits, test-only stabilization delta, repeated full-suite passes, commands, and scope gates. |
 
 **Artifacts:** 3/3 verified.
 
@@ -150,9 +151,10 @@ The resolved debug record at
 - Exactly 12 `S5-AUTO-*` rows covering server, mobile, interop, bridge, wrong
   key, passwordless, busy, offline, stale, restart, malformed, and rapid paths.
 - Exactly 14 `DEV-*` rows covering all architecture UX and transport checklist
-  scenarios for both Android and iOS.
-- All 28 platform cells are `PENDING_DEVICE`; there is no `PASS_DEVICE`,
-  `DEVICE_PASS`, `READY_TO_SHIP`, or release-complete statement.
+  scenarios for Android, with iOS applicability recorded explicitly.
+- All 14 Android cells are `PENDING_DEVICE` and all 14 iOS cells are
+  `NOT_APPLICABLE`; there is no `PASS_DEVICE`, `DEVICE_PASS`, `READY_TO_SHIP`,
+  or release-complete statement.
 - The ledger accurately records mobile implementation `6a4a513`, current mobile
   evidence HEAD via its containing correction commit, server production
   `0af697e`, server evidence `dc44752`, and GoofCord `16c551c`.
@@ -195,8 +197,8 @@ Static/scope:
 
 ## Human-needed release validation
 
-`human_needed: true` applies only to physical Android/iOS Kettu/Hermes release
-evidence:
+`human_needed: true` applies only to physical Android Kettu/Hermes release
+evidence. Kettu has no iOS client, so iOS is not part of this gate:
 
 1. Authentication UX and session-only cloud-key behavior across unload/restart.
 2. Rapid incoming/history and send/edit retain/reject/resend behavior.

@@ -177,7 +177,7 @@ None for the implementation. Remote use requires an existing GoofCord cloud orig
 
 Stage 4 can consume the exported current send keys, ordered decrypt sets, and five-minute conservative revision freshness API without changing the Stage 3 trust/storage boundary.
 
-Stage 5 must still complete the documented Android/iOS Kettu/Hermes redirect-error, abort-during-fetch/body-read, and 16 KiB enforcement checks before real-device remote cold-path release. There is no permissive fallback.
+Stage 5 must still complete the documented Android Kettu/Hermes redirect-error, abort-during-fetch/body-read, and 16 KiB enforcement checks before real-device remote cold-path release. iOS is not applicable because Kettu has no iOS client. There is no permissive fallback.
 
 ---
 *Phase: quick 260718-s4o*

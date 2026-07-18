@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-07-19T00:25:00.000Z"
-last_activity: "2026-07-19 -- Completed automated quick task 260718-wiq: Stage 5 cross-repository acceptance; device release pending"
+last_updated: "2026-07-19T00:40:00.000Z"
+last_activity: "2026-07-19 -- Completed quick task 260719-0lb: Correct Kettu device acceptance to Android-only"
 progress:
   total_phases: 4
   completed_phases: 0
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-05-30)
 Phase: 01 (spike-capture-the-probe-diagnose-the-freeze) — EXECUTING
 Plan: 3 of 4 (Tasks 1-3 done; PAUSED at Task 4 human-verify checkpoint)
 Status: Plan 01-03 awaiting on-device evidence (BLOCKING checkpoint:human-verify)
-Last activity: 2026-07-19 - Completed automated quick task 260718-wiq: Stage 5 cross-repository acceptance; device release pending
+Last activity: 2026-07-19 - Completed quick task 260719-0lb: Correct Kettu device acceptance to Android-only
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -86,6 +86,7 @@ None yet.
 | 260718-s4o | Stage 3 mobile remote session, cache, and UX | 2026-07-18 | 35bc02b | Verified | [260718-s4o-stage-3-implement-kettu-remote-cloud-ses](./quick/260718-s4o-stage-3-implement-kettu-remote-cloud-ses/) |
 | 260718-tyu | Stage 4 remote KDF message cold paths | 2026-07-18 | 2fe1285 | Verified | [260718-tyu-stage-4-wire-remote-kdf-into-kettu-incom](./quick/260718-tyu-stage-4-wire-remote-kdf-into-kettu-incom/) |
 | 260718-wiq | Stage 5 cross-repository automated acceptance | 2026-07-19 | d894e92 | Verified · device pending | [260718-wiq-stage-5-automated-verification-add-a-syn](./quick/260718-wiq-stage-5-automated-verification-add-a-syn/) |
+| 260719-0lb | Correct Kettu device acceptance to Android-only | 2026-07-19 | 7977d3e | Verified · Android pending | [260719-0lb-correct-remote-kdf-device-acceptance-sco](./quick/260719-0lb-correct-remote-kdf-device-acceptance-sco/) |
 
 ## Deferred Items
 

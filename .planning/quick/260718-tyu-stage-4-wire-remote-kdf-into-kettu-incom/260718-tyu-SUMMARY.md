@@ -180,7 +180,7 @@ No new build-time setup. Remote use remains opt-in and requires an existing Goof
 
 ## Next Phase Readiness
 
-Stage 4 is ready for the documented Stage 5 Android/iOS Kettu/Hermes transport verification. The redirect-error, abort-during-fetch/body-read, and response-bounding checklist remains deliberately pending; there is no permissive transport or key-source fallback.
+Stage 4 is ready for the documented Stage 5 Android Kettu/Hermes transport verification. iOS is not applicable because Kettu has no iOS client. The redirect-error, abort-during-fetch/body-read, and response-bounding checklist remains deliberately pending; there is no permissive transport or key-source fallback.
 
 ---
 *Phase: quick 260718-tyu*

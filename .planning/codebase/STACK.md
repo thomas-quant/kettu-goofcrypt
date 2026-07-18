@@ -14,7 +14,7 @@
 ## Runtime
 
 **Environment:**
-- Discord mobile on Android/iOS using the Hermes JavaScript engine - Production plugin runtime; Kettu/Vendetta evaluates the generated bundle.
+- Discord mobile on Android using the Hermes JavaScript engine - Production plugin runtime; Kettu/Vendetta evaluates the generated bundle. Kettu does not exist on iOS.
 - Node.js 24 in CI, Node.js 18+ for local tooling - Build, test, and key-derivation tooling.
 - Browser-compatible bundled output - `scripts/build.mjs` targets ES2017 before ES5 lowering; no server runtime.
 

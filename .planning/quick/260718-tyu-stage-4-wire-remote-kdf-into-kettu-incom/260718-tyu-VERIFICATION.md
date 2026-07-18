@@ -36,11 +36,11 @@ build/typecheck, the protected crypto/stego and exact fixture gates, and all 82
 frozen server tests.
 
 No human-only evidence is required for Stage 4 implementation completeness.
-The documented Android/iOS Kettu redirect, active-fetch/body abort, response
-bounding, and device UX exercises remain the separate Stage 5 release gate.
-They are not counted as Stage 4 gaps because the current implementation probes
-capabilities and fails closed as `REMOTE_UNSUPPORTED` without a permissive
-fallback.
+The documented Android Kettu redirect, active-fetch/body abort, response
+bounding, and device UX exercises remain the separate Stage 5 release gate;
+iOS is not applicable because Kettu has no iOS client. They are not counted as
+Stage 4 gaps because the current implementation probes capabilities and fails
+closed as `REMOTE_UNSUPPORTED` without a permissive fallback.
 
 ## Commit and scope audit
 
@@ -198,8 +198,8 @@ by a small static invariant plus the full integration/build/server gates.
 The following remain intentionally pending Stage 5 acceptance evidence and are
 not Stage 4 gaps:
 
-1. Controlled Android and iOS proof that `redirect: "error"` does not follow a
-   307/308 secret-bearing derive request.
+1. Controlled Android Kettu/Hermes proof that `redirect: "error"` does not
+   follow a 307/308 secret-bearing derive request; iOS is not applicable.
 2. Real Kettu/Hermes proof that timeout, configuration replacement, and unload
    abort active fetch and response-body reads.
 3. Real-runtime proof of streaming or declared-length response mode and the

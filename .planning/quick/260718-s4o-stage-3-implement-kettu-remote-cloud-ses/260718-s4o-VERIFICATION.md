@@ -29,11 +29,11 @@ the Hermes bundle passes its parser/build guards, the frozen server passes all
 82 tests, and the shared vector/reference gates remain green.
 
 No human-only evidence is required to establish Stage 3 implementation
-completeness. Controlled Android/iOS Kettu redirect, fetch/body abort, and
-runtime response-mode exercises remain explicitly pending Stage 5 release-device
-validation. Stage 3 does not claim those device semantics and does not yet use
-the remote transport from live send/receive hooks, so those pending checks are
-not Stage 3 gaps.
+completeness. Controlled Android Kettu redirect, fetch/body abort, and runtime
+response-mode exercises remain explicitly pending Stage 5 release-device
+validation; iOS is not applicable because Kettu has no iOS client. Stage 3 does
+not claim those device semantics and does not yet use the remote transport from
+live send/receive hooks, so those pending checks are not Stage 3 gaps.
 
 ## Commit and scope audit
 
@@ -202,8 +202,8 @@ build guards, server suite, and compatibility harness.
 The following are deliberately not claimed by Stage 3 and remain pending Stage
 5 device-release gates:
 
-1. Controlled Kettu/Hermes Android and iOS proof that `redirect:"error"` does
-   not follow a 307/308 secret-bearing request.
+1. Controlled Android Kettu/Hermes proof that `redirect:"error"` does not
+   follow a 307/308 secret-bearing request; iOS is not applicable.
 2. Real-runtime proof that timeout, configuration replacement, and unload abort
    both fetch and active body reading.
 3. Real-runtime proof of the selected response mode and exact 16 KiB boundary.

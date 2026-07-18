@@ -2,7 +2,7 @@
 
 ## What This Is
 
-GoofCrypt is a Kettu/Vendetta plugin for **Discord mobile** (Android/iOS, Hermes engine) that transparently encrypts outgoing messages and decrypts incoming ones, hiding the ciphertext inside zero-width characters so messages look like normal text. It is **byte-compatible with stegcloak-rs / GoofCord** (the desktop client), so a message encrypted on one client reads correctly on the other.
+GoofCrypt is a Kettu/Vendetta plugin for **Discord mobile on Android** (Hermes engine) that transparently encrypts outgoing messages and decrypts incoming ones, hiding the ciphertext inside zero-width characters so messages look like normal text. Kettu does not exist on iOS. GoofCrypt is **byte-compatible with stegcloak-rs / GoofCord** (the desktop client), so a message encrypted on one client reads correctly on the other.
 
 This milestone is about **speed**: the first-time-per-channel Argon2id key derivation currently freezes the UI for ~10 seconds. The goal is to run that *same* derivation at native (or near-native) speed — without breaking GoofCord compatibility.
 

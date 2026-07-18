@@ -10,7 +10,7 @@ provides:
   - real authenticated server-to-mobile remote-KDF acceptance bridge
   - requirement-level automated evidence ledger
   - stabilized repeatable full server verification evidence
-  - explicit Android/iOS pending device-release ledger
+  - explicit Android-pending and iOS-not-applicable device-release ledger
 affects: [remote-kdf-release, device-validation, acceptance]
 tech-stack:
   added: []
@@ -26,10 +26,10 @@ key-decisions:
   - "Keep the real cross-repository bridge separate from standalone npm test because it deliberately requires Bun and the sibling server checkout."
   - "Exercise the full authenticated v2 application with real security, default cloud decoder, and a real self-tested capacity-one Worker pool; stub only external persistence/auth/OAuth seams."
   - "Keep the server production baseline frozen; resolve the verifier's 5-second harness flake with only the explicit 90-second test timeout already used by other real-Worker integration tests."
-  - "Report automated acceptance separately from device release acceptance; every Android/iOS row remains PENDING_DEVICE."
+  - "Report automated acceptance separately from device release acceptance; every Android row remains PENDING_DEVICE and every iOS row is NOT_APPLICABLE because Kettu has no iOS client."
 patterns-established:
   - "Cross-repository acceptance: production server result must cross the strict mobile client before unchanged mobile crypto can consume it."
-  - "Evidence honesty: direct automated proof may be PASS_AUTOMATED, while physical React Native behavior stays PENDING_DEVICE until captured on both platforms."
+  - "Evidence honesty: direct automated proof may be PASS_AUTOMATED, while physical Android Kettu behavior stays PENDING_DEVICE until captured; a nonexistent iOS Kettu target is NOT_APPLICABLE."
 requirements-completed: [REMOTE-KDF-STAGE-5]
 coverage:
   - id: D1
@@ -49,11 +49,11 @@ coverage:
         status: pass
     human_judgment: false
   - id: D3
-    description: "Android/iOS transport and operational UX release checks are explicitly tracked but remain pending."
+    description: "Android transport and operational UX release checks are explicitly tracked and remain pending; iOS is explicitly not applicable."
     requirement: REMOTE-KDF-STAGE-5
     verification: []
     human_judgment: true
-    rationale: "Node/Bun tests and source/build inspection cannot prove physical Kettu/Hermes redirect, abort, response-bound, or UX behavior."
+    rationale: "Node/Bun tests and source/build inspection cannot prove physical Android Kettu/Hermes redirect, abort, response-bound, or UX behavior; Kettu has no iOS client."
 duration: 33min
 completed: 2026-07-19
 status: complete
@@ -84,8 +84,9 @@ device-release: pending
   only server delta is the bounded harness timeout on one existing real-Worker
   test.
 - Added an evidence ledger with 16 architecture rows, 12 automated-case rows,
-  and 14 physical scenarios whose 28 Android/iOS statuses remain
-  `PENDING_DEVICE`.
+  and 14 physical scenarios whose 14 Android statuses remain `PENDING_DEVICE`
+  and whose 14 iOS statuses are `NOT_APPLICABLE` because Kettu has no iOS
+  client.
 
 ## Task Commits
 
@@ -109,7 +110,7 @@ scoped commits:
   changing the existing `test` script or dependencies.
 - `docs/REMOTE_KDF_ACCEPTANCE.md` - Direct-evidence architecture/automated
   ledger, exact production/evidence server commits, stabilized test evidence,
-  and separate pending Android/iOS release ledger.
+  and separate Android-pending/iOS-not-applicable release ledger.
 - `../goofcord-cloudserver/test/kdf/service.test.ts` - Adds only an explicit
   90-second Bun harness timeout to the existing real decoder/Worker vector test;
   production `jobTimeoutMs` and all assertions remain unchanged.
@@ -129,7 +130,7 @@ scoped commits:
   production baseline `0af697e` -> evidence HEAD `dc44752` one-test-file gate,
   and exact GoofCord reference commit/cleanliness: passed.
 - Ledger structure: 16 `AC-*`, 12 `S5-AUTO-*`, 14 `DEV-*`, no device-pass
-  status, and all Android/iOS cells pending.
+  status, 14 Android cells pending, and 14 iOS cells not applicable.
 
 ## Decisions Made
 
@@ -175,9 +176,10 @@ sibling checkout layout and Bun already used by `goofcord-cloudserver`.
 ## Next Phase Readiness
 
 - Automated Stage 5 evidence is complete and reproducible.
-- Physical Android/iOS validation remains the release blocker: redirect
+- Physical Android validation remains the release blocker: redirect
   rejection, active fetch/body abort, actual response-bound mode, unsupported
-  capability behavior, and the operational UX scenarios in the ledger.
+  capability behavior, and the operational UX scenarios in the ledger. iOS is
+  not a Kettu release target.
 
 ---
 *Quick task: 260718-wiq*
