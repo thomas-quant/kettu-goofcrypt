@@ -53,10 +53,47 @@ or the "Import keys" field in the plugin settings.
 Without key-sync it still works — the first message in each chat just shows a
 "deriving key…" toast and takes ~10s once.
 
+## Remote KDF setup (Stage 3 preview)
+
+The settings screen can prepare and verify an existing GoofCord cloud account
+for a future remote cold-channel path. This Stage 3 preview does **not** change
+live sending or receiving: those hooks still use the manual password/key-sync
+pipeline above until Stage 4.
+
+To prepare remote state, enter an HTTPS origin and your existing GoofCord raw
+32-character lowercase cloud token in the masked settings fields. Origins may
+not contain credentials, paths, queries, or fragments. Direct HTTP is rejected
+unless the development option is enabled and the host is exactly `localhost`,
+`127.0.0.1`, or `[::1]`. The mobile client calls only the read-only derivation
+surface at `/v2/kdf/derive` and `/v2/kdf/revision`; it never writes or reads the
+server-owned blob through `/v1/save`, `/v1/load`, or `/v1/delete`.
+
+The revocable token and bounded channel-key cache are stored in plaintext Kettu
+plugin storage. The cloud encryption key is different: it stays only in memory,
+must be re-entered after restart, and is cleared on replacement, remote
+configuration changes, forgetting credentials, and plugin unload. After setting
+it, use **Verify and refresh current channel** to prove the server can decrypt a
+password-bearing settings blob and populate that channel's ordered keys.
+
+Remote status, channel refresh, revision check, and remote-cache clear are also
+available as `/encrypt` actions. Secret token/key values are deliberately
+settings-only because slash-command arguments and bot replies are copyable. The
+remote cache keeps the current revision and at most two older decrypt-only
+revisions per channel. Clearing it preserves remote credentials and every manual
+password/imported key; forgetting remote configuration removes the origin,
+token, session key, and remote cache while still preserving manual settings.
+
+If Kettu lacks the bounded fetch, abort, URL, or response-reading APIs required
+by the strict client, status reports `REMOTE_UNSUPPORTED` and no permissive
+fallback is attempted. Real-device redirect and abort semantics remain an
+explicit Stage 5 verification gate; see
+[`docs/REMOTE_KDF_MOBILE_TRANSPORT.md`](docs/REMOTE_KDF_MOBILE_TRANSPORT.md).
+
 ## `/encrypt` command
 
 `on` · `off` · `toggle` · `cycle` (next password) · `status` · `bench` (time Argon2) ·
-`set:<passwords>` (set comma-separated passwords) · `import:<bundle>` (key-sync).
+`set:<passwords>` (set comma-separated passwords) · `import:<bundle>` (key-sync) ·
+`remote-status` · `remote-refresh` · `remote-check` · `remote-clear`.
 
 ## Security notes
 
@@ -64,6 +101,10 @@ Without key-sync it still works — the first message in each chat just shows a
 - Passwords and the derived-key cache are stored in **plaintext** in Kettu's plugin
   storage (mobile has no OS keychain). Anyone with file/backup access to your device
   can read them.
+- A configured remote cloud token and remote channel-key cache are likewise
+  plaintext. The universal cloud encryption key is session-only and is never
+  persisted, but JavaScript managed strings cannot be reliably overwritten in
+  place; clearing removes references controlled by the plugin.
 - Sending requires a secure random source for nonces. If none is found, sending is
   disabled (decryption still works). You can opt into an insecure `Math.random`
   fallback in settings, but it's off by default and not recommended.

@@ -15,6 +15,7 @@ import { runProbe, reconcileArmedFlag } from "./discord/nativeProbe";
 import { showToast } from "./discord/metro";
 import { selfTest } from "./selfTest";
 import { SettingsComponent } from "./ui/Settings";
+import { initRemoteKdf, refreshRemoteRevisionOnLoad, shutdownRemoteKdf } from "./cloud/remoteKdf";
 
 /**
  * On-load native-crypto probe wiring (enumeration-only, stale-gated). Runs after
@@ -85,6 +86,7 @@ export default {
             const store = vendetta.plugin.storage;
             initSettings(store);
             initKeyCache(store);
+            initRemoteKdf(store);
 
             // Debug hook for on-device inspection via /eval. Non-secret only
             // (no raw passwords / storage ref).
@@ -113,6 +115,7 @@ export default {
         // (D-05); never invokes native crypto on load. Isolated in safe() so a
         // probe failure cannot break plugin init.
         safe("native-probe", maybeRunProbe);
+        safe("remote-kdf", refreshRemoteRevisionOnLoad);
 
         safe("decrypt-hook", patchFlux);
         safe("send-patch", patchSend);
@@ -124,6 +127,7 @@ export default {
     },
 
     onUnload() {
+        shutdownRemoteKdf();
         unpatchSend();
         unpatchFlux();
         unregisterCommands();

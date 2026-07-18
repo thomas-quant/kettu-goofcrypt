@@ -12,6 +12,13 @@ import { healthSummary } from "../core/health";
 import { fromBase64 } from "../util/base64";
 import { utf8Decode } from "../crypto/deflate";
 import { showToast, MessageActions } from "./metro";
+import {
+    clearRemoteCache,
+    formatRemoteKdfStatus,
+    refreshRemoteChannel,
+    refreshRemoteRevision,
+    remoteErrorMessage,
+} from "../cloud/remoteKdf";
 
 const STRING = 3; // ApplicationCommandOptionType.STRING
 
@@ -52,8 +59,8 @@ export function registerCommands(): void {
     dispose = vendetta.commands.registerCommand({
         name: "encrypt",
         displayName: "encrypt",
-        description: "GoofCrypt: on | off | toggle | cycle | status | bench | diag",
-        displayDescription: "GoofCrypt: on | off | toggle | cycle | status | bench | diag",
+        description: "GoofCrypt: manual controls, diagnostics, and remote setup status/refresh",
+        displayDescription: "GoofCrypt: manual controls, diagnostics, and remote setup status/refresh",
         options: [
             {
                 name: "action",
@@ -74,6 +81,10 @@ export function registerCommands(): void {
                     { name: "bench (time Argon2)", displayName: "bench (time Argon2)", value: "bench" },
                     { name: "diag: probe (enumerate)", displayName: "diag: probe (enumerate)", value: "probe" },
                     { name: "diag: test candidates", displayName: "diag: test candidates", value: "test" },
+                    { name: "remote: status", displayName: "remote: status", value: "remote-status" },
+                    { name: "remote: refresh channel", displayName: "remote: refresh channel", value: "remote-refresh" },
+                    { name: "remote: check revision", displayName: "remote: check revision", value: "remote-check" },
+                    { name: "remote: clear cache", displayName: "remote: clear cache", value: "remote-clear" },
                 ],
             },
             {
@@ -166,6 +177,24 @@ export function registerCommands(): void {
             }
 
             switch (action) {
+                case "remote-status":
+                    reply(channelId, `**GoofCrypt remote KDF**\n${formatRemoteKdfStatus()}\nStage 3 setup only; live messages still use the manual pipeline.`);
+                    break;
+                case "remote-refresh":
+                    if (!channelId) return void reply(channelId, "GoofCrypt: no current channel to refresh");
+                    refreshRemoteChannel(channelId)
+                        .then(() => reply(channelId, "GoofCrypt: current channel verified and remote keys refreshed"))
+                        .catch((error) => reply(channelId, `GoofCrypt: ${remoteErrorMessage(error)}`));
+                    break;
+                case "remote-check":
+                    refreshRemoteRevision(true)
+                        .then(() => reply(channelId, "GoofCrypt: remote revision checked"))
+                        .catch((error) => reply(channelId, `GoofCrypt: ${remoteErrorMessage(error)}`));
+                    break;
+                case "remote-clear":
+                    clearRemoteCache();
+                    reply(channelId, "GoofCrypt: remote cache cleared; manual passwords, keys, and remote credentials kept");
+                    break;
                 case "bench":
                     reply(channelId, "GoofCrypt: timing Argon2 (this is the per-chat cost)…");
                     // Locked benchOnceDetailed contract (Plan 01-02 Task 2):
@@ -212,6 +241,7 @@ export function registerCommands(): void {
                             `• chosen: ${maskPassword(chosenPassword())}\n` +
                             `• RNG: ${secureRngAvailable() ? rngSource() : "none"}\n` +
                             `• health:${healthSummary() || " ok"}\n` +
+                            `• remote: ${formatRemoteKdfStatus()}\n` +
                             `• ${probeSummary().replace(/^ · /, "")}`,
                     );
                     break;

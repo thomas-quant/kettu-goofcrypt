@@ -3,6 +3,7 @@
  * key cache (see core/keycache). Defaults are applied lazily once storage loads.
  */
 import type { KeyCacheStore } from "./core/keycache";
+import type { RemoteKeyCacheStore } from "./core/remoteKeycache";
 
 /**
  * Result of testing one native-crypto candidate (a reachable native module that
@@ -60,7 +61,7 @@ export interface ProbeReport {
     verdict: "GREEN" | "RED" | "untested";
 }
 
-export interface Settings extends KeyCacheStore {
+export interface Settings extends KeyCacheStore, RemoteKeyCacheStore {
     /** Master toggle for ENCRYPTING outgoing messages. Decryption is always on. */
     enabled: boolean;
     /** Comma-separated pre-shared passwords (raw user input). */
@@ -79,6 +80,12 @@ export interface Settings extends KeyCacheStore {
     nativeProbeArmed?: string | null;
     /** Enable zero-overhead-off Argon2 instrumentation (D-08); off by default. */
     debugInstrument?: boolean;
+    /** Canonical remote-KDF origin; empty until explicitly configured. */
+    remoteHost: string;
+    /** Revocable existing GoofCord cloud token (plaintext plugin storage). */
+    remoteAuthToken: string;
+    /** Development-only direct loopback HTTP opt-in. */
+    remoteAllowInsecureLocalhost: boolean;
 }
 
 export const DEFAULTS: Settings = {
@@ -92,6 +99,9 @@ export const DEFAULTS: Settings = {
     nativeProbe: null,
     nativeProbeArmed: null,
     debugInstrument: false,
+    remoteHost: "",
+    remoteAuthToken: "",
+    remoteAllowInsecureLocalhost: false,
 };
 
 let store: Settings | null = null;

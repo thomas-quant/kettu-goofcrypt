@@ -9,6 +9,18 @@ import { secureRngAvailable, rngSource } from "../crypto/random";
 import { importKeys } from "../core/keycache";
 import { fromBase64 } from "../util/base64";
 import { utf8Decode } from "../crypto/deflate";
+import {
+    clearRemoteCache,
+    clearRemoteSessionKey,
+    forgetRemoteConfiguration,
+    formatRemoteKdfStatus,
+    refreshRemoteChannel,
+    refreshRemoteRevision,
+    remoteErrorMessage,
+    saveRemoteConfiguration,
+    setRemoteSessionKey,
+} from "../cloud/remoteKdf";
+import { getCurrentChannelId } from "../discord/metro";
 
 const React: any = vendetta.metro.common.React;
 const RN: any = vendetta.metro.common.ReactNative;
@@ -30,7 +42,13 @@ function Label(props: { text: string; hint?: string }) {
     );
 }
 
-function Input(props: { value: string; onChange: (v: string) => void; multiline?: boolean }) {
+function Input(props: {
+    value: string;
+    onChange: (v: string) => void;
+    multiline?: boolean;
+    placeholder?: string;
+    secureTextEntry?: boolean;
+}) {
     return (
         <RN.TextInput
             style={{
@@ -44,6 +62,9 @@ function Input(props: { value: string; onChange: (v: string) => void; multiline?
             }}
             value={props.value}
             multiline={props.multiline}
+            placeholder={props.placeholder}
+            placeholderTextColor="#888"
+            secureTextEntry={props.secureTextEntry}
             autoCapitalize="none"
             autoCorrect={false}
             onChangeText={props.onChange}
@@ -75,7 +96,65 @@ export function SettingsComponent() {
     const [cover, setCover] = React.useState(s.cover ?? "");
     const [mark, setMark] = React.useState(s.mark ?? "");
     const [bundle, setBundle] = React.useState("");
+    const [remoteHost, setRemoteHost] = React.useState(s.remoteHost ?? "");
+    const [remoteToken, setRemoteToken] = React.useState("");
+    const [remoteCloudKey, setRemoteCloudKey] = React.useState("");
+    const [allowRemoteHttp, setAllowRemoteHttp] = React.useState(s.remoteAllowInsecureLocalhost ?? false);
+    const [remoteStatus, setRemoteStatus] = React.useState(formatRemoteKdfStatus());
     const rng = secureRngAvailable() ? rngSource() : "NONE — sending unavailable";
+
+    const updateRemoteStatus = () => setRemoteStatus(formatRemoteKdfStatus());
+
+    const remoteFailure = (error: unknown) => {
+        updateRemoteStatus();
+        showToast(`GoofCrypt: ${remoteErrorMessage(error)}`);
+    };
+
+    const saveRemote = () => {
+        const token = remoteToken.trim() || s.remoteAuthToken;
+        try {
+            saveRemoteConfiguration(remoteHost, token, allowRemoteHttp);
+            showToast("GoofCrypt: remote configuration saved; session key cleared if configuration changed");
+        } catch (error) {
+            remoteFailure(error);
+        }
+        setRemoteToken("");
+        updateRemoteStatus();
+    };
+
+    const setSessionKey = () => {
+        try {
+            setRemoteSessionKey(remoteCloudKey);
+            showToast("GoofCrypt: session cloud key set; verify the current channel next");
+        } catch (error) {
+            remoteFailure(error);
+        }
+        setRemoteCloudKey("");
+        updateRemoteStatus();
+    };
+
+    const verifyCurrentChannel = () => {
+        const channelId = getCurrentChannelId();
+        if (!channelId) {
+            showToast("GoofCrypt: no current channel to refresh");
+            return;
+        }
+        refreshRemoteChannel(channelId)
+            .then(() => {
+                updateRemoteStatus();
+                showToast("GoofCrypt: current channel verified and remote keys refreshed");
+            })
+            .catch(remoteFailure);
+    };
+
+    const checkRemoteRevision = () => {
+        refreshRemoteRevision(true)
+            .then(() => {
+                updateRemoteStatus();
+                showToast("GoofCrypt: remote revision checked");
+            })
+            .catch(remoteFailure);
+    };
 
     const save = () => {
         s.passwords = passwords;
@@ -120,6 +199,86 @@ export function SettingsComponent() {
             <Input value={bundle} onChange={setBundle} multiline />
             <RN.View style={{ height: 8 }} />
             <RN.Button title="Import keys" onPress={doImport} />
+
+            <RN.View style={{ height: 28 }} />
+            <Label
+                text="Remote KDF (Stage 3 setup)"
+                hint="Prepares and verifies remote channel keys. Live messages still use the existing manual pipeline until Stage 4."
+            />
+            <Label text="Remote HTTPS origin" hint="An origin only, with no path. Direct HTTP is development-only for exact loopback hosts." />
+            <Input value={remoteHost} onChange={setRemoteHost} placeholder="https://cloud.example.com" />
+            <RN.View style={{ height: 12 }} />
+            <Label
+                text="Existing cloud token"
+                hint="Stored in plaintext Kettu storage. Leave blank to retain the configured token."
+            />
+            <Input
+                value={remoteToken}
+                onChange={setRemoteToken}
+                placeholder={s.remoteAuthToken ? "Token configured" : "32-character lowercase token"}
+                secureTextEntry
+            />
+            <Toggle
+                label="Allow direct loopback HTTP"
+                hint="Development only: exact localhost, 127.0.0.1, or [::1]."
+                value={allowRemoteHttp}
+                onChange={setAllowRemoteHttp}
+            />
+            <RN.Button title="Save remote origin and token" onPress={saveRemote} />
+
+            <RN.View style={{ height: 18 }} />
+            <Label
+                text="Session cloud encryption key"
+                hint="Memory-only and cleared on restart, unload, replacement, or remote configuration change."
+            />
+            <Input
+                value={remoteCloudKey}
+                onChange={setRemoteCloudKey}
+                placeholder="Re-enter for each plugin session"
+                secureTextEntry
+            />
+            <RN.View style={{ height: 8 }} />
+            <RN.Button title="Set session cloud key" onPress={setSessionKey} />
+            <RN.View style={{ height: 8 }} />
+            <RN.Button
+                title="Clear session cloud key"
+                onPress={() => {
+                    clearRemoteSessionKey();
+                    setRemoteCloudKey("");
+                    updateRemoteStatus();
+                    showToast("GoofCrypt: session cloud key cleared");
+                }}
+            />
+
+            <RN.View style={{ height: 18 }} />
+            <RN.Button title="Verify and refresh current channel" onPress={verifyCurrentChannel} />
+            <RN.View style={{ height: 8 }} />
+            <RN.Button title="Check remote revision" onPress={checkRemoteRevision} />
+            <RN.View style={{ height: 12 }} />
+            <RN.Text style={{ opacity: 0.75, fontSize: 12, color: "#fff" }}>{remoteStatus}</RN.Text>
+
+            <RN.View style={{ height: 18 }} />
+            <RN.Button
+                title="Clear remote channel-key cache (manual keys kept)"
+                onPress={() => {
+                    clearRemoteCache();
+                    updateRemoteStatus();
+                    showToast("GoofCrypt: remote cache cleared; manual passwords and keys kept");
+                }}
+            />
+            <RN.View style={{ height: 8 }} />
+            <RN.Button
+                title="Forget remote origin and token (manual settings kept)"
+                onPress={() => {
+                    forgetRemoteConfiguration();
+                    setRemoteHost("");
+                    setRemoteToken("");
+                    setRemoteCloudKey("");
+                    setAllowRemoteHttp(false);
+                    updateRemoteStatus();
+                    showToast("GoofCrypt: remote configuration, session key, and remote cache cleared; manual settings kept");
+                }}
+            />
 
             <Toggle
                 label="Allow insecure RNG"
