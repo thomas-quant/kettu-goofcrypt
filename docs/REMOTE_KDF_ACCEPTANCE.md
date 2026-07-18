@@ -25,10 +25,17 @@ Automated evidence was rerun on 2026-07-18 in the sibling workspace layout
 `kettu-goofcrypt/` beside `goofcord-cloudserver/` and `stegcloak-rs/`.
 
 - Mobile verified Stage 4 base: `fd7278443ecbb70295695371c924041e4dccf0b0`.
-  The Stage 5 delta is limited to `package.json`,
-  `tests/remoteKdfStage5.test.mjs`, and this ledger; the containing commit is
-  the authoritative Stage 5 tree identity in Git history.
-- Server input: `0af697eedaa3ae6797071ff60b991c3fa685ea64`, clean.
+- Mobile Stage 5 implementation commit:
+  `6a4a513453e596c323abe49267603bd01dafbb81`. Its implementation delta is
+  limited to `package.json`, `tests/remoteKdfStage5.test.mjs`, and this ledger;
+  the later evidence correction is the commit containing this document.
+- Server production implementation baseline:
+  `0af697eedaa3ae6797071ff60b991c3fa685ea64`.
+- Server evidence HEAD: `dc44752ffc90ce0f32fa9d6ffd22d75921a6a940`,
+  clean. Its only delta from the production baseline is
+  `test/kdf/service.test.ts`, which adds an explicit 90-second Bun harness
+  timeout to the existing real-Worker vector test; production source,
+  dependencies, fixtures, and assertions are unchanged.
 - GoofCord reference input: `16c551c5a6fbdde137e7f13b4dca01883e3a691d`,
   clean.
 
@@ -37,9 +44,9 @@ Automated evidence was rerun on 2026-07-18 in the sibling workspace layout
 | `G-BRIDGE` | `npm run test:remote-kdf-stage5` | 1 passed, 0 failed, 8 assertions; real default decoder, self-tested Worker pool, authenticated full app, strict mobile client, and mobile message pipeline. |
 | `G-MOBILE` | `npm test` | 163 passed, 0 failed, including the unchanged real stegcloak-rs WASM compatibility harness. |
 | `G-BUILD` | `npm run build && npm exec tsc -- --noEmit` | Passed; bundle hash `0e4e946fbcf03aca`, 291,085 bytes, class-free. |
-| `G-SERVER` | `cd ../goofcord-cloudserver && bun run typecheck && bun test` | 82 passed, 0 failed, 424 assertions across 16 files. |
+| `G-SERVER` | `cd ../goofcord-cloudserver && bun test test/kdf/service.test.ts && bun run typecheck && bun test` | Focused service suite passed 6/6; typecheck passed; after the test-only timeout stabilization, three consecutive full suites passed 82/82 with 424 assertions each. |
 | `G-FIXTURE` | `cmp tests/fixtures/remoteKdf/argon2id-v1.json ../goofcord-cloudserver/test/fixtures/remoteKdf/argon2id-v1.json` | Passed byte-for-byte. |
-| `G-SCOPE` | Protected-path diff plus exact-clean server/reference commit gates from the Stage 5 plan | Passed; production source, existing fixtures/tests, lockfiles, server, and GoofCord reference are unchanged. |
+| `G-SCOPE` | Protected-path diff plus exact server/reference commit gates | Passed; the mobile production tree, existing mobile tests/fixtures/lockfile, server production source/dependencies/fixtures, and GoofCord reference are unchanged. Server evidence HEAD differs from production baseline only in `test/kdf/service.test.ts` by the bounded test-harness timeout. |
 
 The bridge is intentionally not part of standalone `npm test`: it requires the
 sibling server checkout and Bun. `npm run test:remote-kdf-stage5` is the
@@ -54,7 +61,7 @@ the named direct evidence and fresh gates, not on those reports alone.
 
 | ID | Architecture criterion | Direct evidence | Gate | Status |
 |---|---|---|---|---|
-| `AC-01` | No GoofCord source or dependency changes are required. | Exact clean GoofCord reference commit, exact clean server commit, protected mobile-source/fixture/lockfile diff, and a Stage 5 package diff containing only the additive command. | `G-SCOPE` | `PASS_AUTOMATED` |
+| `AC-01` | No GoofCord source or dependency changes are required. | Exact clean GoofCord reference commit, unchanged server production baseline, one isolated server test-harness stabilization commit/file, protected mobile-source/fixture/lockfile diff, and a Stage 5 package diff containing only the additive command. | `G-SCOPE` | `PASS_AUTOMATED` |
 | `AC-02` | The existing byte-compatibility harness remains green. | `tests/harness.ts`: both ours-to-theirs and theirs-to-ours real stegcloak-rs cases, parity checks, and `VEC_PW path is GoofCord byte-compatible`. | `G-MOBILE`, `G-FIXTURE` | `PASS_AUTOMATED` |
 | `AC-03` | Server startup refuses KDF readiness on an exact-vector mismatch. | Server `test/kdf/pool.test.ts`: `fails startup generically and terminates every worker when any self-test fails`; `test/runtime/server.test.ts`: `refuses to listen and closes KDF state when startup self-test fails`. | `G-SERVER` | `PASS_AUTOMATED` |
 | `AC-04` | Remote KDF cannot run with only a stolen or valid cloud bearer token. | Server `test/integration/v2.test.ts`: `returns exact stable bodies for request, auth, settings, and service failures` includes token-only `INVALID_REQUEST`; mobile `tests/harness.ts`: empty cloud key rejection. | `G-SERVER`, `G-MOBILE` | `PASS_AUTOMATED` |
