@@ -1,10 +1,10 @@
 # Authenticated Remote KDF Architecture
 
-**Status:** Proposed implementation specification  
-**Date:** 2026-07-18  
-**Primary client:** GoofCrypt for Kettu/Discord mobile  
-**Server:** the separately maintained `goofcord-cloudserver` fork  
-**Compatibility target:** current GoofCord/stegcloak-rs message format
+- **Status:** Proposed implementation specification
+- **Date:** 2026-07-18
+- **Primary client:** GoofCrypt for Kettu/Discord mobile
+- **Server:** the separately maintained `goofcord-cloudserver` fork
+- **Compatibility target:** current GoofCord/stegcloak-rs message format
 
 ## Goal Mode handoff
 
