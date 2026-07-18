@@ -1,181 +1,125 @@
 # Codebase Concerns
 
-**Analysis Date:** 2026-05-30
+**Analysis Date:** 2026-07-18
 
 ## Tech Debt
 
-**`decryptedIds` set is never pruned:**
-- Issue: `decryptedIds` in `src/discord/flux.ts` (line 18) is a module-level `Set<string>` that accumulates every decrypted message ID across the session. There is no eviction, size cap, or clear on `unpatchFlux`. Over a long session with thousands of messages the set grows without bound.
-- Files: `src/discord/flux.ts`
-- Impact: Memory pressure on mobile. `clearMemory()` in `src/core/keycache.ts` is called on `onUnload` but does not touch `decryptedIds`. Plugin reload leaves the set populated since the variable is module-scoped.
-- Fix approach: Add `decryptedIds.clear()` inside `unpatchFlux()`, or use a bounded LRU / weak-reference approach for IDs older than N messages.
+**Plaintext password and derived-key persistence:**
+- Issue: `src/settings.ts` stores the configured password string, while `src/core/keycache.ts` persists derived 32-byte keys as base64 in `vendetta.plugin.storage`.
+- Why: The cache is designed to survive restarts and avoid repeating the 64 MiB Argon2id derivation.
+- Impact: Anyone able to inspect plugin storage obtains the passwords or reusable channel keys; `clearMemory()` does not remove persisted keys.
+- Fix approach: Keep the casual-privacy limitation explicit, and if the host offers secure storage, move passwords and/or key material behind it. Add a migration and an explicit cache-clear path before changing the persisted format.
 
-**`deriving` set guard is per-message not per-channel:**
-- Issue: `backgroundDecrypt` in `src/discord/flux.ts` (line 17–46) guards duplicate work with a `deriving` Set keyed by message ID. When `LOAD_MESSAGES_SUCCESS` delivers a batch of N cloaked messages from the same channel, each has a unique ID and each passes the `deriving.has(id)` check. `deriveKey` in `src/core/keycache.ts` deduplicates concurrent Argon2 calls via the `pending` Map, so actual Argon2 work is not duplicated, but N separate `backgroundDecrypt` IIFE coroutines are still launched and N separate `MESSAGE_UPDATE` re-dispatches will fire after derivation completes — one per original message.
-- Files: `src/discord/flux.ts`, `src/core/keycache.ts`
-- Impact: On initial channel open with many cloaked messages the Flux dispatcher gets flooded with `MESSAGE_UPDATE` events simultaneously, which could cause visible stuttering or flicker.
-- Fix approach: Guard `backgroundDecrypt` by `channelId` rather than `messageId`, or batch re-dispatch once derivation completes for all pending messages in that channel.
+**Import path accepts unvalidated key-store data:**
+- Issue: `src/core/keycache.ts:51-64` copies arbitrary object keys and values into persistent storage; `src/ui/Settings.tsx:88-94` and `src/discord/commands.ts:110-118` only decode JSON/base64 and do not validate bundle version, channel IDs, password IDs, key lengths, or base64 canonicality.
+- Why: The path was added as a low-friction desktop-to-mobile key-sync escape hatch.
+- Impact: Malformed or oversized input can poison the cache, make later `fromBase64` lookups return invalid-length keys, or consume storage. It can also silently report successful imports that cannot decrypt.
+- Fix approach: Validate the outer shape, permitted identifiers, exact 32-byte decoded key length, and expected bundle version before mutating storage; import transactionally and test rejection cases.
 
-**`noUnusedLocals: false` in tsconfig:**
-- Issue: `tsconfig.json` sets `"noUnusedLocals": false`, meaning dead code and unused imports accumulate silently.
-- Files: `tsconfig.json`
-- Impact: Low — current codebase is small and clean. Sets a permissive precedent.
-- Fix approach: Enable `noUnusedLocals: true` and fix any resulting warnings.
-
-**No `tsc` type-check step in CI or build:**
-- Issue: `scripts/build.mjs` uses esbuild which transpiles without type checking. `scripts/test.mjs` bundles with esbuild too. The CI workflow (`.github/workflows/ci.yml`) runs only `npm test` and `npm run build` — neither invokes `tsc`. TypeScript errors are only caught locally via editor tooling.
-- Files: `package.json`, `.github/workflows/ci.yml`, `scripts/build.mjs`
-- Impact: Type regressions can ship to production undetected. The `strict: true` in tsconfig has no enforcement path.
-- Fix approach: Add a `"typecheck": "tsc --noEmit"` script and add it as a CI step before build.
-
-**Diagnose files committed to repository root:**
-- Issue: `diagnose.txt`, `diagnose2.txt`, `diagnose3.txt` are checked in to the repository root. They contain raw Discord `eval` snippets used during development, including one that previously exposed a `storageRef` (see `diagnose3.txt` contents referencing `g.storageRef`).
-- Files: `diagnose.txt`, `diagnose2.txt`, `diagnose3.txt`
-- Impact: Leaks internal debugging surface and historical API shape. Not a security risk by themselves, but adds noise and reveals implementation details.
-- Fix approach: Delete all three files and add `diagnose*.txt` to `.gitignore`.
-
-**Duplicate `showToast` implementations:**
-- Issue: `showToast` is implemented twice: once in `src/discord/metro.ts` (exported) and again as a local copy in `src/ui/Settings.tsx` (lines 16–22). The Settings copy does not log to `vendetta.logger` as a fallback.
-- Files: `src/discord/metro.ts`, `src/ui/Settings.tsx`
-- Impact: Bug divergence — if the toast API changes, one copy may be fixed and the other not.
-- Fix approach: Import `showToast` from `src/discord/metro.ts` in `Settings.tsx`.
-
----
-
-## Security Considerations
-
-**Passwords stored in plaintext in Vendetta plugin storage:**
-- Risk: `settings().passwords` is a raw comma-separated string stored in Kettu's reactive storage, which is plaintext JSON on-device. There is no keychain, secure enclave, or OS-level secret storage. This is acknowledged in `src/core/keycache.ts` (line 13–14) but is an inherent limitation, not a mitigated risk.
-- Files: `src/settings.ts`, `src/core/keycache.ts`
-- Current mitigation: Passwords are described as "pre-shared, casual privacy" — the security model is explicit. Derived keys have the same exposure.
-- Recommendations: Document clearly in README that passwords are not protected by a PIN or device lock. For higher-threat use cases, advise against persistent storage of passwords.
-
-**Password input field is not masked (`secureTextEntry` absent):**
-- Risk: The `Input` component in `src/ui/Settings.tsx` renders a plain `RN.TextInput` without `secureTextEntry={true}`. When users type or paste passwords in the settings UI, the text is visible on screen (shoulder-surfing risk) and may appear in keyboard autocomplete suggestions.
-- Files: `src/ui/Settings.tsx` (line 33–51)
-- Current mitigation: None.
-- Recommendations: Add `secureTextEntry={true}` to the password `Input` field. The cover and mark fields should remain plain text.
-
-**Key bundle import has no shape validation beyond `JSON.parse`:**
-- Risk: `importKeys` in `src/core/keycache.ts` (lines 51–64) iterates `Object.keys(keysObj)` and writes every value directly into `store.keys` without checking that values are valid base64 strings, that channel IDs are snowflake-shaped, or that the passwordId keys are 22-char base64. A malformed bundle silently writes garbage keys, which could cause decrypt failures on legitimate messages that looked up a poisoned slot.
-- Files: `src/core/keycache.ts`, `src/discord/commands.ts` (line 81–82), `src/ui/Settings.tsx` (lines 89–90)
-- Current mitigation: The outer `try/catch` in callers catches JSON parse errors. Post-parse structural errors are silent.
-- Recommendations: Validate that each value in an imported bundle matches a 43-44 char base64 pattern before writing, and that the outer shape has string→object→string nesting.
-
-**`__goofcrypt` global debug hook persists after `onUnload`:**
-- Risk: `(globalThis as any).__goofcrypt` is set during `onLoad` (`src/index.ts` lines 56–65) but never deleted in `onUnload`. After the plugin is disabled, the hook remains on `globalThis` and is accessible to any other Discord eval snippet or plugin. The hook exposes `selfTest` (a full crypto round-trip function) and `diag()` (plugin internals).
-- Files: `src/index.ts`
-- Current mitigation: The hook intentionally excludes raw passwords and the storage reference. `diag()` returns only counts.
-- Recommendations: Add `delete (globalThis as any).__goofcrypt;` to `onUnload`.
-
-**`allowInsecureRng` path uses `Math.random` for XChaCha nonces:**
-- Risk: If a user enables "Allow insecure RNG", nonces are generated with `Math.random` (`src/crypto/random.ts` lines 104–107). `Math.random` is not a CSPRNG; on some JS engines the output is predictable given a few samples. This would allow a passive observer (with access to ciphertexts) to brute-force the nonce space and recover plaintext.
-- Files: `src/crypto/random.ts`, `src/discord/send.ts` (line 22)
-- Current mitigation: The option is off by default and labelled "weaker" in the UI. A toast warns on load if it triggers the disable branch.
-- Recommendations: The current warning in settings is minimal. Add a stronger warning (modal-style, not just hint text) when the user tries to enable this toggle.
-
----
-
-## Performance Bottlenecks
-
-**LOAD_MESSAGES_SUCCESS launches one backgroundDecrypt coroutine per cloaked message:**
-- Problem: When switching to a channel with 50 cloaked messages and a cold key cache, `patchFlux` launches 50 independent async coroutines, each awaiting `deriveKey` for each password. `deriveKey` correctly deduplicates concurrent Argon2 calls via the `pending` Map, so Argon2 only runs once per (channel, password) pair. However, 50 simultaneous coroutines still contend, and on completion all 50 fire `FluxDispatcher().dispatch()` with `MESSAGE_UPDATE` within the same microtask drain, potentially causing 50 consecutive React re-renders.
-- Files: `src/discord/flux.ts` (lines 40–72), `src/core/keycache.ts`
-- Cause: Deduplication operates at the Argon2 level but not at the re-dispatch level.
-- Improvement path: After derivation completes, batch the pending messages and issue a single `LOAD_MESSAGES_SUCCESS`-style bulk re-dispatch rather than N individual `MESSAGE_UPDATE` events.
-
-**Argon2 takes ~10s on-device (by design, 64 MiB, 3 iterations):**
-- Problem: First send or decrypt to any channel without an imported key triggers a ~10s blocking-equivalent derivation. The async path (`deriveKeyAsync` with `asyncTick: 50`) is used to keep the UI responsive, but the total wall time is still ~10s per (channel, password) pair.
-- Files: `src/crypto/argon.ts`, `scripts/build.mjs` (macrotask patch)
-- Cause: The `@noble/hashes` pure-JS Argon2id implementation has no 64-bit integer optimisation for JS. This is inherent to the platform.
-- Improvement path: The key-sync / `derive-keys.mjs` desktop tool mitigates this for known channels. Document clearly in settings that importing keys eliminates the delay. No code change can make pure-JS Argon2 fast.
-
----
-
-## Fragile Areas
-
-**Build relies on regex-patching noble's `utils.js` at bundle time:**
-- Files: `scripts/build.mjs` (lines 29–42)
-- Why fragile: The `nobleMacrotaskYield` esbuild plugin matches the exact string `export const nextTick = async () => { };` in `@noble/hashes/utils.js`. If `@noble/hashes` is updated to a version where this line changes (whitespace, semicolons, or a different yield strategy), the patch silently fails with a thrown error that blocks the build entirely.
-- Safe modification: Always pin `@noble/hashes` to an exact version (`1.7.1` is already in `package.json` but with a caret `^1.7.1`), and run `npm test && npm run build` after any dependency update. The build throws if the regex misses, so the failure is loud.
-- Test coverage: The CI build step will catch it (`npm run build` throws on patch failure).
-
-**Build relies on regex checks for `class` and generator syntax surviving swc:**
-- Files: `scripts/build.mjs` (lines 80–91)
-- Why fragile: Correctness of the Hermes-safe build depends on post-build regex assertions (`/\bclass\s*/`, `/function\s*\*/`, `/_iteratorNormalCompletion/`). If swc changes its output shape (e.g., emits `var X={...}` instead of `class X{...}`), the class check regex may pass but the output could still use syntax Hermes rejects.
-- Safe modification: The self-test (`src/selfTest.ts`) does an on-device smoke check for transpiler regressions at runtime. Update the regex checks if `@swc/core` is upgraded.
-- Test coverage: Build-time regex check + on-device self-test cover the known failure modes.
-
-**`vendetta` API is entirely `any`-typed:**
-- Files: `src/global.d.ts`, all `src/discord/` files
-- Why fragile: The entire Vendetta/Kettu plugin host API is declared as `declare const vendetta: any`. All metro lookups, patchers, and toasts are untyped. A Kettu version update that renames or restructures `vendetta.patcher.before`, `vendetta.metro.findByProps`, or `vendetta.ui.toasts.showToast` would silently type-check but throw at runtime.
-- Safe modification: When adding new use-sites of the vendetta API, always wrap in `try/catch` (the `safe()` pattern in `src/index.ts` already does this for init). Use optional chaining on all vendetta accesses.
-- Test coverage: None — no way to test vendetta API availability without the real runtime.
-
-**`MessageActions()` metro lookup is cached on first call and never invalidated:**
-- Files: `src/discord/metro.ts` (lines 6–12)
-- Why fragile: `_msgActions` is set once via `??=`. If Discord hot-reloads its module registry (possible during app update or reconnect), `_msgActions` holds a stale reference. Sending would silently fail or use the wrong module.
-- Safe modification: Consider re-resolving on each call (the lookup is cheap) or clearing `_msgActions` in `onUnload`.
-- Test coverage: None.
-
-**`stegcloak-rs` devDependency is pinned to a commit SHA via GitHub source:**
-- Files: `package.json` (line 20), `package-lock.json`
-- Why fragile: `"stegcloak-rs": "github:Milkshiift/stegcloak-rs"` resolves to commit `847c39e`. This is a source-level dependency requiring build tooling (the WASM is not pre-built in npm). If the upstream repo is deleted, renamed, or force-pushed, the CI will break. The lockfile pins the commit SHA, but npm install from a clean environment fetches from GitHub directly.
-- Safe modification: Fork the repo under the project owner's GitHub account or vendor the compiled WASM binary directly into the repo.
-- Test coverage: CI `npm install` will fail loudly if the upstream disappears.
-
----
-
-## Test Coverage Gaps
-
-**On-device / runtime integration paths are untested:**
-- What's not tested: The entire `src/discord/` layer (`flux.ts`, `send.ts`, `commands.ts`, `metro.ts`) has zero automated tests. The Flux dispatch patch, the send intercept, the command registration, and all vendetta API interactions are only exercised by loading the plugin in Kettu on a real device.
-- Files: `src/discord/flux.ts`, `src/discord/send.ts`, `src/discord/commands.ts`, `src/discord/metro.ts`
-- Risk: A Kettu API change silently breaks encryption/decryption without any CI signal.
-- Priority: High
-
-**Key import (`importKeys`) is untested:**
-- What's not tested: The key-sync workflow — `importKeys` in `src/core/keycache.ts`, the import path in `src/discord/commands.ts` and `src/ui/Settings.tsx`, and the `derive-keys.mjs` → mobile round-trip — has no test in `tests/harness.ts`. The harness only tests the stegcloak byte-compatibility pipeline.
-- Files: `src/core/keycache.ts`, `tests/harness.ts`
-- Risk: A regression in `passwordId()` or `toBase64/fromBase64` would silently break key-sync, causing decryption failures on mobile for channels that relied on imported keys.
-- Priority: High
-
-**`src/core/decrypt.ts` multi-password fallback is untested:**
-- What's not tested: The `decryptWithCachedKeys` loop across multiple passwords, `orderPasswords` winner hinting, and the `decryptCorrupt` error path (authenticated decrypt but failed decompress) have no dedicated tests.
-- Files: `src/core/decrypt.ts`, `src/core/keycache.ts`
-- Risk: Regressions in multi-password ordering or the corruption-detection branch would be silent.
-- Priority: Medium
-
-**`src/crypto/random.ts` fallback chain is untested:**
-- What's not tested: The RNG probe chain (`detectRng`) — Metro `getRandomValues`, Metro `randomBytes`, and the `Math.random` insecure fallback — is never exercised in the harness (which injects Node's `webcrypto` directly).
-- Files: `src/crypto/random.ts`
-- Risk: A new Kettu version that removes the standard `crypto.getRandomValues` global could silently fall through to the insecure fallback if `allowInsecureRng` is set.
-- Priority: Low
-
-**Health counters are not tested:**
-- What's not tested: `src/core/health.ts` counters (`deriveFails`, `decryptCorrupt`, `sendAborts`) and `healthSummary()` output format are not covered.
-- Files: `src/core/health.ts`
-- Risk: Formatting regressions in status output; silent counter overflow on long sessions (JavaScript numbers don't overflow, so this is cosmetic only).
-- Priority: Low
-
----
+**Global debug hook lifecycle leak:**
+- Issue: `src/index.ts:89-101` installs `globalThis.__goofcrypt`, but `onUnload()` only unpatches Discord hooks, unregisters commands, and clears memory (`src/index.ts:126-131`).
+- Why: The hook is useful for on-device diagnostics and was added without unload symmetry.
+- Impact: Reloading or disabling the plugin leaves stale diagnostic functions and references reachable from the global object, potentially calling torn-down state and retaining objects.
+- Fix approach: Record ownership of the installed hook and delete or restore it during unload, guarding against another plugin replacing it.
 
 ## Known Bugs
 
-**`base64.ts` LOOKUP table has no bounds check for non-ASCII characters:**
-- Symptoms: `fromBase64()` in `src/util/base64.ts` (line 39) indexes into an `Int16Array(128)` with `str.charCodeAt(i)`. For any character with code point >= 128 (e.g., a pasted key bundle containing a non-ASCII character from clipboard), `LOOKUP[charCodeAt]` returns `undefined` (not `-1`), and the `if (v < 0) continue;` guard does not skip it — `undefined < 0` is `false` in JavaScript.
-- Files: `src/util/base64.ts`
-- Trigger: Paste a key bundle string that contains a non-ASCII character (accidental copy of surrounding text, smart quotes, etc.).
-- Workaround: The outer `try/catch` in the import handlers would eventually catch a malformed result, but the corruption happens silently within `fromBase64`.
-- Fix: Change the guard to `if (v == null || v < 0) continue;` or clamp the index: `const v = i < 128 ? LOOKUP[str.charCodeAt(i)] : -1`.
+**Settings changes do not invalidate or re-warm cached/decryption state:**
+- Symptoms: Changing passwords in the settings screen saves the new string but leaves old in-memory/persisted keys available; changing the mark or password list does not clear `src/discord/flux.ts`'s `decryptedIds`.
+- Trigger: Decrypt or encrypt a channel, then edit passwords/mark in `src/ui/Settings.tsx:80-85` and continue using the same channel/messages.
+- Workaround: Disable/reload the plugin or use the command path that cycles settings; this is not a reliable user-facing fix.
+- Root cause: The save handler writes settings only. There is no cache invalidation or reprocessing policy coupled to settings mutation, and `src/core/keycache.ts:114-118` is only called on unload.
 
-**Settings UI does not re-derive or warm keys after passwords are saved:**
-- Symptoms: After typing new passwords in the Settings UI and pressing "Save", the `mem` key cache still holds stale entries for old passwords. The new passwords are stored to `settings().passwords` but no warm-up is triggered. The next send or decrypt will trigger a ~10s derivation delay.
-- Files: `src/ui/Settings.tsx` (lines 80–84)
-- Trigger: Change passwords in settings, then immediately try to send or receive a message in a channel.
-- Workaround: `/encrypt cycle` or `/encrypt on` triggers a `warm()` call that starts background derivation.
-- Fix: Call `warm(getCurrentChannelId())` after `save()` in the Settings component.
+**Inbound history can launch many background decrypt coroutines:**
+- Symptoms: Opening a channel containing multiple cloaked messages can show repeated derivation toasts, schedule many per-message async tasks, and produce a burst of `MESSAGE_UPDATE` dispatches.
+- Trigger: `LOAD_MESSAGES_SUCCESS` with several uncached cloaked messages (`src/discord/flux.ts:102-105`).
+- Workaround: Pre-warm the channel key with `/encrypt` commands before opening history.
+- Root cause: `src/discord/flux.ts:49-93` guards by message ID, while `src/core/keycache.ts:85-97` deduplicates only the underlying `(channel,password)` derivation. The surrounding coroutines and redispatches are still multiplied by message count.
+
+## Security Considerations
+
+**Explicit insecure RNG opt-in weakens nonce security:**
+- Risk: `src/crypto/random.ts:102-109` uses `Math.random()` when requested, which is not a CSPRNG and can make XChaCha nonce collisions or prediction materially more plausible. Reuse of a `(key, nonce)` pair compromises AEAD confidentiality/integrity.
+- Current mitigation: `allowInsecureRng` defaults to false (`src/settings.ts:86-92`), and send availability is checked in `src/discord/send.ts:30-35` / `src/discord/commands.ts:20-22`.
+- Recommendations: Keep the default deny behavior; require an unmistakable confirmation explaining the consequence, expose the active RNG source, and consider refusing insecure mode for production builds.
+
+**Native RNG output validation is incomplete:**
+- Risk: `src/crypto/random.ts:27-40` accepts any `Uint8Array` or array without checking that it contains at least the requested number of bytes; base64 strings are truncated rather than rejected. Short output can produce a nonce with insufficient entropy.
+- Current mitigation: The source is selected only from modules exposing expected random APIs, and secure mode is disabled if discovery fails.
+- Recommendations: Enforce exact output length and reject malformed/non-canonical native results before returning bytes; add tests for short arrays, short strings, and throwing providers.
+
+## Performance Bottlenecks
+
+**Pure-JavaScript Argon2id derivation:**
+- Problem: `src/crypto/argon.ts:13-22` uses Argon2id with 64 MiB memory, time cost 3, and parallelism 1; the synchronous path remains available to compatibility code.
+- Measurement: Project documentation and implementation notes record roughly a 10-second first derivation on mobile; `src/crypto/argon.ts:111-145` exposes timing and longest-block diagnostics but no committed device baseline.
+- Cause: Hermes lacks fast native 64-bit integer support; the bundled implementation is pure JS. The async path yields through a build-time patch but does not reduce total CPU work.
+- Improvement path: Prefer a byte-exact native implementation only after the vector gate in `tests/harness.ts:214-232` passes. Preserve the current Argon2 parameters and retain a measured fallback.
+
+## Fragile Areas
+
+**Build-time patch of noble `nextTick`:**
+- Why fragile: `scripts/build.mjs:29-40` rewrites one exact source declaration inside `@noble/hashes`; a dependency update or formatting change can make the replacement fail or change semantics. Runtime responsiveness depends on this becoming a macrotask.
+- Common failures: A dependency bump can reintroduce microtask-only yielding and restore UI starvation, or a changed module path can bypass the plugin.
+- Safe modification: Pin and audit the dependency, keep the source-literal CI assertion in `tests/harness.ts:186-207`, and verify `assertMacrotaskYield()` on-device.
+- Test coverage: The harness checks the patch target, but Node does not execute the shipped patched bundle; real Hermes behavior is covered only by diagnostics/self-test.
+
+**Hermes transpilation and iteration assumptions:**
+- Why fragile: `scripts/build.mjs:93-120` relies on SWC ES5 lowering and `iterableIsArray:true`, because iterator-protocol lowering reportedly drops the first element under the target Hermes runtime.
+- Common failures: New `Map`/`Set` iteration, unsupported syntax, or a bundler/transpiler upgrade can silently alter runtime behavior while Node tests remain green.
+- Safe modification: Use index loops for arrays and explicit Map/Set access, run the build guards, and test the resulting bundle on-device.
+- Test coverage: `src/selfTest.ts:29-57` checks selected parse/stego/base64 invariants, not every generated control-flow path or Discord host interaction.
+
+**Memoized Metro `MessageActions` handle:**
+- Why fragile: `src/discord/metro.ts:6-12` caches the first resolved module indefinitely.
+- Common failures: Discord reloads or replaces Metro modules and the cached object becomes stale; sends then fail or use an invalid host reference until plugin reload.
+- Safe modification: Resolve per operation or add invalidation on host/module failure, while preserving the fallback lookup behavior.
+- Test coverage: No automated test exercises Metro replacement, stale handles, or Vendetta patch lifecycle.
+
+## Scaling Limits
+
+**Per-channel/per-password cache growth:**
+- Current capacity: `src/core/keycache.ts:26-28` retains one in-memory key per `(channelId,password)` and persists every derived key; there is no TTL, LRU, channel cap, or persisted-cache pruning.
+- Limit: Growth is proportional to the number of channels visited times configured passwords and is bounded only by device/plugin storage.
+- Symptoms at limit: Increased storage size, slower cache reads/serialization, and retained sensitive material for channels no longer used.
+- Scaling path: Add bounded eviction and an explicit “clear derived keys” control, with careful persistence and re-derivation semantics.
+
+## Dependencies at Risk
+
+**`@noble/hashes` integration contract:**
+- Risk: The build relies on a private-ish source shape and import resolution details of `@noble/hashes` (`scripts/build.mjs:32-39`), while Argon2 performance is central to the product.
+- Impact: Version drift can break builds, silently restore freezes, or alter cryptographic behavior before compatibility tests catch all runtime effects.
+- Migration plan: Keep the version pinned, fail closed on patch mismatch, run cross-implementation vectors for every upgrade, and isolate any native replacement behind the same vectors.
+
+## Missing Critical Features
+
+**Reliable key-cache/settings lifecycle management:**
+- Problem: There is no user-visible cache revocation, password-change migration, or safe purge operation; only volatile memory is cleared on unload.
+- Current workaround: Reloading the plugin clears memory, but persisted keys remain and settings edits do not coordinate with them.
+- Blocks: Users cannot confidently rotate passwords or remove derived material from the device.
+- Implementation complexity: Medium; requires storage schema/versioning, cache invalidation, UI/command affordances, and regression tests.
+
+## Test Coverage Gaps
+
+**Key-sync validation and persistence round trips:**
+- What's not tested: The harness covers wire compatibility, but does not test `importKeys` shape rejection, malformed base64, exact key length, storage mutation behavior, or derive-keys output through import and subsequent `getCachedKey`.
+- Risk: Desktop-derived keys can appear imported while remaining unusable, or malformed input can persist silently.
+- Priority: High
+- Difficulty to test: Low to medium; provide a mock Kettu storage and fixtures from `tools/derive-keys.mjs`.
+
+**Host lifecycle and settings behavior:**
+- What's not tested: `onLoad`/`onUnload` symmetry, global hook cleanup, Metro module replacement, Flux payload variants, settings save invalidation, and repeated history loads.
+- Risk: Device-only regressions can leave stale patches/hooks, fail sends after Discord reloads, or cause duplicate decrypt work without CI detection.
+- Priority: High
+- Difficulty to test: Medium; requires host API mocks and dispatch fixtures, but most core lifecycle assertions can run under Node.
+
+**RNG provider failure modes:**
+- What's not tested: Native providers returning short or malformed values, provider exceptions after detection, and explicit insecure-RNG UX/guard behavior.
+- Risk: Encryption may use weak or malformed nonces despite the secure-RNG gate.
+- Priority: Medium
+- Difficulty to test: Low; inject/mock provider results and assert exact-length rejection.
 
 ---
 
-*Concerns audit: 2026-05-30*
+*Concerns audit: 2026-07-18*
+*Update as issues are fixed or new ones discovered*

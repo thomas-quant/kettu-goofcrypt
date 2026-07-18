@@ -1,203 +1,160 @@
 # Codebase Structure
 
-**Analysis Date:** 2026-05-30
+**Analysis Date:** 2026-07-18
 
 ## Directory Layout
 
 ```
 kettu-goofcrypt/
-├── src/                    # All plugin source code (TypeScript)
-│   ├── index.ts            # Plugin entry point (onLoad/onUnload/settings)
-│   ├── manifest.ts         # Plugin ID and metadata constants
-│   ├── settings.ts         # Typed settings proxy + password helpers
-│   ├── selfTest.ts         # On-device regression checks (no Argon2)
-│   ├── global.d.ts         # `vendetta` global type declaration
-│   ├── core/               # Multi-password orchestration layer
-│   │   ├── decrypt.ts      # Sync decrypt using cached keys only
-│   │   ├── encrypt.ts      # Sync encrypt given a pre-derived key
-│   │   ├── health.ts       # In-memory error counters
-│   │   ├── keycache.ts     # Two-level key store (mem + persisted)
-│   │   ├── payload.ts      # Binary frame/unframe (nonce + ct wire format)
-│   │   └── stegcloak.ts    # Pure single-password pipeline (harness compat)
-│   ├── crypto/             # Cryptographic primitives
-│   │   ├── aead.ts         # XChaCha20-Poly1305 encrypt/decrypt
-│   │   ├── argon.ts        # Argon2id key derivation (sync + async)
-│   │   ├── deflate.ts      # Raw-DEFLATE compress/decompress + UTF-8
-│   │   └── random.ts       # CSPRNG probe chain + getRandomBytes
-│   ├── discord/            # Discord / Vendetta integration layer
-│   │   ├── commands.ts     # /encrypt slash command
-│   │   ├── flux.ts         # FluxDispatcher patch (inbound decrypt)
-│   │   ├── metro.ts        # Lazy metro module resolution + toast
-│   │   └── send.ts         # MessageActions patch (outbound encrypt)
-│   ├── stego/              # Steganography
-│   │   └── zwc.ts          # Zero-width-character encode/decode/embed
-│   ├── ui/                 # React Native UI
-│   │   └── Settings.tsx    # Plugin settings screen component
-│   └── util/               # Shared utilities
-│       └── base64.ts       # Uint8Array ↔ base64 (no Buffer/atob dependency)
-├── tests/
-│   └── harness.ts          # Byte-compat gate vs. stegcloak-rs WASM (Node)
-├── tools/
-│   └── derive-keys.mjs     # Desktop key-derivation tool (key-sync workflow)
-├── scripts/
-│   ├── build.mjs           # esbuild + swc pipeline → site/index.js
-│   └── test.mjs            # Bundle harness + run under Node
-├── site/                   # Build output (gitignored); Kettu installs from here
-│   ├── index.js            # Built plugin bundle (ES5, expression form)
-│   └── manifest.json       # Plugin manifest with SHA-256 hash
-├── .github/
-│   └── workflows/
-│       └── ci.yml          # CI pipeline
-├── package.json
-├── tsconfig.json
-└── README.md
+├── .planning/                 # GSD project state, research, phases, and codebase maps
+├── scripts/                   # Node build and compatibility-test orchestration
+├── site/                      # Static GitHub Pages output consumed by Kettu
+├── src/                       # TypeScript plugin implementation
+│   ├── core/                  # Protocol and multi-password orchestration
+│   ├── crypto/                # Cipher, KDF, compression, and RNG primitives
+│   ├── discord/               # Vendetta/Discord host adapters and commands
+│   ├── stego/                 # Zero-width-character encoding
+│   ├── ui/                    # React Native settings screen
+│   └── util/                  # Runtime-safe utility helpers
+├── tests/                     # Node/WASM byte-compatibility harness
+├── tools/                     # Developer-only key derivation utility
+├── package.json               # Scripts and dependency manifest
+├── tsconfig.json              # Strict TypeScript checking configuration
+├── README.md                  # Project/user documentation
+└── AGENTS.md                  # Repository operating instructions
 ```
 
 ## Directory Purposes
 
+**`src/`:**
+- Purpose: Shipped plugin source, bundled from `src/index.ts`.
+- Contains: TypeScript, TSX, and ambient host declarations in `src/global.d.ts`.
+- Key files: `src/index.ts`, `src/settings.ts`, `src/selfTest.ts`, `src/manifest.ts`.
+- Subdirectories: `core/`, `crypto/`, `discord/`, `stego/`, `ui/`, and `util/`.
+
 **`src/core/`:**
-- Purpose: Business logic — multi-password, key-cached encrypt/decrypt; format framing; error telemetry
-- Contains: Orchestration that sits above raw crypto primitives but below Discord-specific patches
-- Key files: `src/core/keycache.ts` (most complex module), `src/core/decrypt.ts`, `src/core/encrypt.ts`
+- Purpose: Wire-compatible encryption/decryption and stateful key orchestration.
+- Contains: `encrypt.ts`, `decrypt.ts`, `stegcloak.ts`, `payload.ts`, `keycache.ts`, and `health.ts`.
+- Ownership: Protocol framing and multi-password/channel behavior; no Discord patching.
 
 **`src/crypto/`:**
-- Purpose: Cryptographic primitives — each file wraps one algorithm/concern
-- Contains: Thin wrappers over `@noble/ciphers`, `@noble/hashes`, and `fflate`; no Discord or plugin logic
-- Key files: `src/crypto/argon.ts` (defines KDF parameters), `src/crypto/aead.ts` (defines AEAD constants)
+- Purpose: Low-level cryptographic and encoding primitives.
+- Contains: `aead.ts`, `argon.ts`, `deflate.ts`, and `random.ts`.
+- Ownership: XChaCha20-Poly1305, Argon2id, raw DEFLATE/UTF-8, and secure RNG detection.
 
 **`src/discord/`:**
-- Purpose: All Vendetta API surface — patcher calls, metro module lookups, command registration
-- Contains: Everything that touches `vendetta.*` directly (except `global.d.ts`)
-- Key files: `src/discord/flux.ts` (inbound), `src/discord/send.ts` (outbound)
-
-**`src/stego/`:**
-- Purpose: Zero-width-character steganography port of stegcloak-rs
-- Contains: A single file with pure string arithmetic; no external dependencies
+- Purpose: Adapt core behavior to Vendetta/Discord internals.
+- Contains: `flux.ts`, `send.ts`, `commands.ts`, `metro.ts`, and `nativeProbe.ts`.
+- Ownership: Patching, event handling, command UX, host module lookup, and diagnostic probing.
 
 **`src/ui/`:**
-- Purpose: React Native settings screen; rendered via the plugin's `settings:` export
-- Contains: Functional components using `vendetta.metro.common.React` and `ReactNative`
-
-**`src/util/`:**
-- Purpose: Shared helpers with zero runtime dependencies (Hermes-safe)
-- Contains: `base64.ts` — no Buffer, no atob/btoa assumption
-
-**`tests/`:**
-- Purpose: Device-free byte-compatibility harness run in CI via Node
-- Contains: `harness.ts` — cross-checks our pipeline against the real `stegcloak-rs` WASM in both directions
-
-**`tools/`:**
-- Purpose: Developer-only utilities run on desktop, not part of the plugin bundle
-- Contains: `derive-keys.mjs` — pre-derives Argon2id keys on desktop for import to mobile (key-sync workflow)
+- Purpose: React Native settings integration.
+- Key file: `src/ui/Settings.tsx`.
+- Ownership: Password, cover, mark, RNG, diagnostics, and key-import controls.
 
 **`scripts/`:**
-- Purpose: Build and test runner scripts
-- Contains: `build.mjs` (esbuild → swc pipeline), `test.mjs` (bundle + execute harness)
+- Purpose: Developer/CI orchestration, not shipped runtime behavior.
+- Key files: `scripts/build.mjs` creates `site/index.js` and `site/manifest.json`; `scripts/test.mjs` bundles and launches the harness.
+
+**`tests/`:**
+- Purpose: Reference interoperability and runtime regression checks.
+- Key file: `tests/harness.ts`.
+- Generated subdirectory: `tests/dist/` contains the bundled test harness.
 
 **`site/`:**
-- Purpose: Build artefact directory; Kettu plugin manager fetches from here (GitHub Pages)
-- Generated: Yes
-- Committed: No (gitignored during development; deployed by CI)
+- Purpose: Deployment artifact for static hosting.
+- Key files: `site/index.js` and `site/manifest.json`.
+- Source: Generated by `scripts/build.mjs`; do not hand-edit generated output.
+
+**`.planning/`:**
+- Purpose: GSD-managed project context and planning artifacts.
+- Key locations: `.planning/PROJECT.md`, `.planning/ROADMAP.md`, `.planning/phases/`, `.planning/research/`, `.planning/codebase/`.
 
 ## Key File Locations
 
 **Entry Points:**
-- `src/index.ts`: Plugin lifecycle — `onLoad`, `onUnload`, `settings` export
-- `src/manifest.ts`: Plugin ID (`uk.digigrow.goofcrypt`) and display metadata
+- `src/index.ts`: Kettu plugin lifecycle and settings export.
+- `scripts/build.mjs`: Bundle/delivery build entry.
+- `scripts/test.mjs`: Test build/launch entry.
+- `tests/harness.ts`: Cross-compatibility assertion entry.
 
 **Configuration:**
-- `tsconfig.json`: TypeScript compiler config (ES2020 target, `jsx: "react"`, `jsxFactory: "React.createElement"`, no emit)
-- `package.json`: Dependencies (`@noble/ciphers`, `@noble/hashes`, `fflate`) and build scripts
-- `scripts/build.mjs`: Build pipeline config (esbuild options, swc ES5 lowering, validation guards)
+- `package.json`: npm scripts, runtime metadata, and dependencies.
+- `tsconfig.json`: strict no-emit TypeScript configuration.
+- `site/manifest.json`: generated Kettu installation metadata.
+- `src/global.d.ts`: declarations for host-injected Vendetta globals.
 
 **Core Logic:**
-- `src/core/keycache.ts`: Key lifecycle — most central module; all derivation and persistence
-- `src/core/decrypt.ts`: Sync decrypt entrypoint called from the Flux hot path
-- `src/core/encrypt.ts`: Sync encrypt entrypoint called from the send patch
-- `src/stego/zwc.ts`: Wire-format steganography; byte-exact with stegcloak-rs
+- `src/core/stegcloak.ts`: single-password reference-compatible pipeline.
+- `src/core/encrypt.ts` and `src/core/decrypt.ts`: Kettu-facing operations.
+- `src/core/keycache.ts`: async derivation, persistence, and cache deduplication.
+- `src/crypto/argon.ts`: Argon2id parameters and async yielding variants.
+- `src/stego/zwc.ts`: zero-width payload concealment/extraction.
 
 **Testing:**
-- `tests/harness.ts`: Integration / compatibility test — the only test file
-- `scripts/test.mjs`: Test runner (esbuild-bundles the harness then executes under Node)
+- `tests/harness.ts`: WASM reference cross-checks and internal invariants.
+- `tests/dist/`: generated bundled harness output.
 
-**Desktop Tools:**
-- `tools/derive-keys.mjs`: Key-sync derivation tool; run with `npx tsx tools/derive-keys.mjs`
+**Documentation:**
+- `README.md`: project usage/deployment documentation.
+- `AGENTS.md`: local collaboration and GSD instructions.
+- `.planning/`: project planning and current-state analysis documents.
 
 ## Naming Conventions
 
 **Files:**
-- `camelCase.ts` for all TypeScript source files (e.g., `keycache.ts`, `deflate.ts`)
-- `PascalCase.tsx` for React Native UI components (e.g., `Settings.tsx`)
-- `camelCase.mjs` for build/tool scripts (e.g., `build.mjs`, `derive-keys.mjs`)
-- `kebab-case` for script names that appear in `package.json`
+- Lowercase camelCase or single lowercase words for modules, e.g. `src/core/keycache.ts` and `src/stego/zwc.ts`.
+- PascalCase for React component files, e.g. `src/ui/Settings.tsx`.
+- Uppercase Markdown for project/planning documents, e.g. `README.md` and `.planning/PROJECT.md`.
+- Node build tools use lowercase descriptive names, e.g. `scripts/build.mjs`.
 
 **Directories:**
-- Lowercase, single-word: `core/`, `crypto/`, `discord/`, `stego/`, `ui/`, `util/`
+- Lowercase singular conceptual layers: `src/core`, `src/crypto`, `src/stego`, `src/ui`, `src/util`.
+- `.planning/phases/` uses numbered, descriptive phase directories.
+- Generated outputs are separated into `site/` and `tests/dist/`.
 
-**Exported functions:**
-- camelCase verbs: `encryptWithKey`, `decryptWithCachedKeys`, `deriveKeyAsync`, `getCachedKey`, `isCloaked`
-- Boolean predicates prefixed with `is`/`can`: `isReady`, `isCloaked`, `isCached`, `canEnable`, `secureRngAvailable`
-- Init functions: `init` prefix — `initSettings`, `initKeyCache`
-- Patch/unpatch pairs: `patchFlux`/`unpatchFlux`, `patchSend`/`unpatchSend`
-- Register/unregister pairs: `registerCommands`/`unregisterCommands`
-
-**Exported classes/errors:**
-- PascalCase, `Error` suffix: `MessageTooLongError`, `PayloadError`, `RngUnavailableError`, `DecryptionError`, `IntegrityError`
-
-**Exported interfaces:**
-- PascalCase: `Settings`, `KeyCacheStore`, `DecryptResult`
-
-**Constants:**
-- SCREAMING_SNAKE_CASE: `DISCORD_CONTENT_LIMIT`, `VERSION_1`, `NONCE_LENGTH`, `TAG_LENGTH`, `KEY_LENGTH`, `DEFAULTS`, `PLUGIN_ID`
+**Special Patterns:**
+- Named exports are the default; only `src/index.ts` exports the plugin default object.
+- `patchX`/`unpatchX`, `registerX`/`unregisterX`, `initX`, and `clearX` pair lifecycle functions.
+- Source files begin with a purpose/caveat documentation block.
 
 ## Where to Add New Code
 
-**New crypto primitive (algorithm, codec):**
-- Implementation: `src/crypto/<algorithm>.ts`
-- Must be Hermes-safe (no TextEncoder/TextDecoder/Buffer unless polyfilled; no class syntax in built output)
-- Export pure functions only; no module-level I/O
+**New Feature:**
+- Primary code: choose the owning layer under `src/core/`, `src/crypto/`, `src/discord/`, or `src/ui/`.
+- Tests: extend `tests/harness.ts` for protocol/runtime invariants; there is no separate unit-test tree.
+- Build changes: `scripts/build.mjs`; deployment metadata remains generated in `site/`.
 
-**New core operation (e.g., signing, format v2):**
-- Implementation: `src/core/<operation>.ts`
-- May import from `src/crypto/` and `src/stego/` but not from `src/discord/`
-- Wire-format changes require updating `src/core/payload.ts` and adding harness test cases to `tests/harness.ts`
+**New Component/Module:**
+- Implementation: matching existing layer directory under `src/`.
+- Types: colocate interfaces with their owning module; use `src/global.d.ts` only for host ambient declarations.
+- Tests: add assertions to `tests/harness.ts` when behavior affects compatibility or runtime safety.
 
-**New Discord command or subcommand:**
-- Location: `src/discord/commands.ts` — add to the `execute` switch or add a new `options` entry
-- Test manually via `/encrypt <action>` on device; no automated coverage for commands
+**New Route/Command:**
+- Definition/handler: `src/discord/commands.ts`.
+- Host module resolution: `src/discord/metro.ts`.
+- User-facing settings controls: `src/ui/Settings.tsx`.
 
-**New Flux event handler:**
-- Location: `src/discord/flux.ts` — add a `case` to the `handle()` switch
-- The handler must remain synchronous; schedule any async work via fire-and-forget async IIFE
-
-**New setting field:**
-- Add to the `Settings` interface in `src/settings.ts`
-- Add a default in `DEFAULTS` in `src/settings.ts`
-- Add UI control to `src/ui/Settings.tsx`
-
-**New utility (no external deps, Hermes-safe):**
-- Location: `src/util/<name>.ts`
-
-**New test case for stegcloak-rs compat:**
-- Location: `tests/harness.ts` — add to `CASES` array for automatic cross-check in all 6 test sections
+**Utilities:**
+- Shared runtime-safe helpers: `src/util/`.
+- Cryptographic/encoding primitives belong in `src/crypto/` or `src/stego/`, not generic utilities.
 
 ## Special Directories
 
-**`site/` (build output):**
-- Purpose: Contains `index.js` (the ES5 plugin bundle) and `manifest.json` with SHA-256 hash
-- Generated: Yes — by `npm run build` (`scripts/build.mjs`)
-- Committed: Only in CI/deployment; not tracked during development
+**`site/`:**
+- Purpose: Generated static deployment bundle.
+- Source: `scripts/build.mjs`.
+- Committed: Repository deployment output is present; regenerate rather than manually modify.
 
-**`tests/dist/` (test bundle):**
-- Purpose: Temporary esbuild output of the harness (`tests/dist/harness.mjs`)
-- Generated: Yes — by `npm test` (`scripts/test.mjs`)
-- Committed: No
+**`tests/dist/`:**
+- Purpose: Generated Node ESM harness bundle.
+- Source: `scripts/test.mjs`.
+- Committed: Treat as build output; source of truth is `tests/harness.ts`.
 
 **`.planning/codebase/`:**
-- Purpose: GSD codebase analysis documents consumed by planning and execution agents
-- Generated: Yes — by GSD map-codebase commands
-- Committed: Yes
+- Purpose: GSD current-state reference documents consumed by future planning/execution.
+- Source: Repository mapping workflow/agent analysis.
+- Committed: Planning artifacts are maintained by the orchestrator.
 
----
-
-*Structure analysis: 2026-05-30*
+*Structure analysis: 2026-07-18*
+*Update when directory structure changes*

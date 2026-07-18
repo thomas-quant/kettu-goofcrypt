@@ -1,79 +1,78 @@
 # Technology Stack
 
-**Analysis Date:** 2026-05-30
+**Analysis Date:** 2026-07-18
 
 ## Languages
 
 **Primary:**
-- TypeScript 5.9.3 — all plugin source under `src/` and tests under `tests/`
+- TypeScript 5.9.x - Plugin source under `src/` and compatibility tests under `tests/`; strict type-checking is configured in `tsconfig.json`.
 
 **Secondary:**
-- JavaScript (ESM) — build scripts (`scripts/build.mjs`, `scripts/test.mjs`) and developer tool (`tools/derive-keys.mjs`)
+- JavaScript/ECMAScript modules - Build and test scripts in `scripts/`, plus the desktop key tool in `tools/`.
+- JSX/TSX - React Native settings UI in `src/ui/Settings.tsx`.
 
 ## Runtime
 
 **Environment:**
-- Target runtime: Discord for Android/iOS running the **Hermes** JavaScript engine (React Native)
-  - Hermes constraints: no `class` syntax in `eval`, no `TextEncoder`/`TextDecoder`, no guaranteed `crypto.getRandomValues`, no `Buffer`
-  - Bundle is evaluated by the **Kettu** (Vendetta-compatible) plugin loader as a single expression: `vendetta => { return <bundle> }`
-- Development/test runtime: Node.js 24 (CI pinned); minimum Node 18 for tooling
+- Discord mobile on Android/iOS using the Hermes JavaScript engine - Production plugin runtime; Kettu/Vendetta evaluates the generated bundle.
+- Node.js 24 in CI, Node.js 18+ for local tooling - Build, test, and key-derivation tooling.
+- Browser-compatible bundled output - `scripts/build.mjs` targets ES2017 before ES5 lowering; no server runtime.
 
 **Package Manager:**
-- npm 11 (lockfile v3 present at `package-lock.json`)
-- Lockfile: present (`package-lock.json`)
+- npm 11.x - Dependency installation and package scripts.
+- Lockfile: `package-lock.json` present (lockfile v3).
 
 ## Frameworks
 
 **Core:**
-- No framework — plain TypeScript modules. UI uses React/ReactNative accessed via `vendetta.metro.common.React` and `vendetta.metro.common.ReactNative` (host-injected globals, not bundled)
+- Kettu/Vendetta plugin APIs - Host lifecycle, storage, patching, Metro lookup, commands, UI, logging, and toasts; injected by Discord mobile rather than bundled.
+- React/React Native host components - Settings screen, accessed through `vendetta.metro.common`.
 
 **Testing:**
-- Custom Node.js test runner — `scripts/test.mjs` esbuild-bundles `tests/harness.ts` with the `.wasm` asset loader, then runs the bundle under Node. No Jest/Vitest.
+- Custom Node.js harness - `scripts/test.mjs` bundles `tests/harness.ts` and runs it; no Jest/Vitest framework.
+- `stegcloak-rs` WASM reference - Test-only oracle for byte-exact cross-compatibility.
 
 **Build/Dev:**
-- esbuild 0.24.2 — bundles `src/index.ts` as an IIFE targeting ES2017 browser (`scripts/build.mjs`)
-- @swc/core 1.15.40 — post-processes the esbuild bundle to ES5 so no `class` syntax survives into Hermes `eval`
-- tsx 4.22.3 — TypeScript execution for the `tools/derive-keys.mjs` desktop key-derivation tool
-- typescript 5.9.3 — type-checking only (`noEmit: true` in `tsconfig.json`)
+- esbuild 0.24.x - Bundles `src/index.ts` into an IIFE and bundles the test harness; also loads the reference `.wasm` asset in tests.
+- SWC `@swc/core` 1.15.x - Converts the plugin bundle to ES5 for Hermes parsing.
+- TypeScript 5.9.x - Type-checking only (`noEmit: true`).
+- tsx 4.22.x - Runs `tools/derive-keys.mjs` with TypeScript imports.
 
 ## Key Dependencies
 
 **Critical:**
-- `@noble/ciphers` 1.3.0 — XChaCha20-Poly1305 AEAD encryption (`src/crypto/aead.ts`); implements the wire-compatible cipher matching stegcloak-rs/GoofCord
-- `@noble/hashes` 1.8.0 — Argon2id key derivation (`src/crypto/argon.ts`); pure JS, 64 MiB memory cost; also provides SHA-256 for password ID hashing (`src/core/keycache.ts`)
-- `fflate` 0.8.3 — raw DEFLATE compression/decompression (`src/crypto/deflate.ts`); also supplies `strToU8`/`strFromU8` for UTF-8 encoding (replacing `TextEncoder` which is absent in Hermes)
+- `@noble/hashes` 1.8.x - Pure-JavaScript Argon2id and SHA-256; Argon2id uses GoofCord-compatible 64 MiB / 3-pass / parallelism-1 parameters.
+- `@noble/ciphers` 1.3.x - XChaCha20-Poly1305 AEAD used by the wire format.
+- `fflate` 0.8.x - Raw DEFLATE and UTF-8 conversion without relying on Hermes `TextEncoder`/`Buffer`.
+- `stegcloak-rs` GitHub dependency - WASM compatibility reference, never shipped in the mobile plugin.
 
-**Dev/Infrastructure:**
-- `stegcloak-rs` (github:Milkshiift/stegcloak-rs) — WASM reference implementation used only in the test harness (`tests/harness.ts`) to cross-check byte-for-byte compatibility; not shipped in the plugin bundle
-- `@swc/core` 1.15.40 — ES5 transpilation step in `scripts/build.mjs`; critical for Hermes compatibility (`class` elimination, `iterableIsArray` assumption to eliminate iterator-protocol `for...of` lowering)
-- `esbuild` 0.24.2 — bundler; applies a custom plugin (`noble-macrotask-yield`) to patch `@noble/hashes` `nextTick` from microtask to `setTimeout` so Argon2 derivation yields the UI thread
+**Infrastructure:**
+- Node.js built-ins (`node:fs/promises`, `node:crypto`, `node:path`, `node:url`) - Build, hashing, filesystem, and test-runner support.
 
 ## Configuration
 
-**TypeScript:**
-- `tsconfig.json`: `target: ES2020`, `module: ESNext`, `moduleResolution: Bundler`, `jsx: react`, `jsxFactory: React.createElement`, strict mode on, `noEmit: true`
-- No path aliases configured
+**Environment:**
+- No environment variables or `.env` configuration are required by the application; plugin settings and cached keys are held in `vendetta.plugin.storage`.
+- Production installation metadata is generated in `site/manifest.json`; the generated bundle is `site/index.js`.
 
 **Build:**
-- `scripts/build.mjs` — esbuild → swc ES5 pipeline; output written to `site/index.js` and `site/manifest.json`
-- Build validates output with two guards: `new Function()` parse check (Kettu eval compatibility) and regex checks blocking any surviving `class`/generator/`_iteratorNormalCompletion` syntax
-
-**Environment:**
-- No `.env` files — the plugin has no server-side component and no API keys
-- Settings persisted via `vendetta.plugin.storage` (Kettu's reactive proxy), keys stored as base64 JSON in the same storage object
+- `tsconfig.json` - ES2020 TypeScript checking, bundler resolution, React JSX, strict mode, and no emit.
+- `scripts/build.mjs` - esbuild bundle, noble macrotask-yield patch, sync-derive import-graph guard, SWC ES5 lowering, Hermes syntax guards, eval-expression validation, and Pages manifest generation.
+- `scripts/test.mjs` - esbuild test bundling with `.wasm` file loading, then Node execution with `--experimental-wasm-stringref`.
+- `package.json` - `build`, `test`, and `derive` workflows and dependency declarations.
 
 ## Platform Requirements
 
 **Development:**
-- Node.js >=18 (CI uses Node 24)
-- npm (lockfile v3)
-- `--experimental-wasm-stringref` flag required by `scripts/test.mjs` for the stegcloak-rs WASM module
+- Node.js 18+ and npm; CI runs Node.js 24.
+- `npm test` requires Node's `--experimental-wasm-stringref` support for the `stegcloak-rs` WASM test dependency.
+- A Discord mobile/Kettu installation is required for device behavior, Vendetta APIs, Hermes parsing, and React Native integration checks.
 
 **Production:**
-- Deployed as a static GitHub Pages site (`site/` directory)
-- Plugin installer URL points to `site/manifest.json`; Kettu fetches and evaluates `site/index.js`
-- No server, no database, no API keys — fully static delivery
+- Static GitHub Pages hosting publishes `site/manifest.json` and `site/index.js`.
+- Kettu installs the manifest URL and evaluates the generated single-expression plugin bundle inside Discord mobile; no backend, database, or API keys are used.
 
 ---
 
-*Stack analysis: 2026-05-30*
+*Stack analysis: 2026-07-18*
+*Update after major dependency changes*

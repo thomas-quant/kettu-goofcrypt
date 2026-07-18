@@ -1,167 +1,107 @@
 # Coding Conventions
 
-**Analysis Date:** 2026-05-30
+**Analysis Date:** 2026-07-18
 
 ## Naming Patterns
 
 **Files:**
-- Lowercase camelCase for modules: `keycache.ts`, `stegcloak.ts`, `deflate.ts`, `base64.ts`
-- PascalCase for React components: `Settings.tsx`
-- Kebab-case does not appear; all filenames use camelCase or lowercase single words
-- Test harness is lowercase: `harness.ts`
+- Lowercase camelCase or lowercase single-word module names: `src/core/keycache.ts`, `src/crypto/argon.ts`, `src/stego/zwc.ts`.
+- React components use PascalCase: `src/ui/Settings.tsx`.
+- No dedicated test-file naming convention exists; the test suite is centralized in `tests/harness.ts`.
 
 **Functions:**
-- camelCase for all exported and internal functions: `deriveKey`, `getCachedKey`, `encryptWithKey`, `decryptWithCachedKeys`, `initKeyCache`, `orderPasswords`, `rememberWinner`
-- Boolean-returning functions use is/has/can prefix: `isCloaked`, `isCached`, `isReady`, `secureRngAvailable`, `canEnable`, `isMarked`, `isWhitespace`
-- Side-effect init functions use `init` prefix: `initSettings`, `initKeyCache`
-- Cleanup/teardown functions use `clear` prefix: `clearMemory`
-- Patch/unpatch pairs share prefix: `patchSend`/`unpatchSend`, `patchFlux`/`unpatchFlux`
-- Register/unregister pairs: `registerCommands`/`unregisterCommands`
+- camelCase for functions, including async functions: `deriveKey`, `getCachedKey`, `decryptWithCachedKeys`.
+- `is`/`has`/`can` prefixes identify boolean predicates: `isCloaked`, `isCached`, `secureRngAvailable`.
+- `init`, `clear`, `patch`/`unpatch`, and `register`/`unregister` prefixes identify lifecycle pairs.
 
 **Variables:**
-- camelCase throughout; no Hungarian notation
-- Module-level mutable singletons use short names: `store`, `mem`, `pending`, `winners`, `rngFn`, `dispose`, `unpatch`, `disposers`
-- Constants use UPPER_SNAKE_CASE: `DISCORD_CONTENT_LIMIT`, `DEFAULTS`, `OPTS`, `ASYNC_OPTS`, `KEY_LENGTH`, `VERSION_1`, `NONCE_LENGTH`, `TAG_LENGTH`, `ZWC`, `IDX`, `CHARS`, `LOOKUP`, `CHANNEL`
-- Intermediate variables in closures use short conventional names: `n`, `k`, `p`, `b`, `t`, `v`, `acc`, `out`
+- camelCase locals and parameters; short closure/loop names such as `n`, `p`, `b`, and `v` are used for small scopes.
+- UPPER_SNAKE_CASE for protocol and configuration constants: `DISCORD_CONTENT_LIMIT`, `NONCE_LENGTH`, `TAG_LENGTH`.
+- Module-level mutable singletons use `let` and concise names (`store`, `mem`, `pending`, `unpatch`); they are not exported directly.
 
-**Types and Interfaces:**
-- PascalCase for interfaces and type aliases: `Settings`, `KeyCacheStore`, `DecryptResult`, `RandomBytes`, `Case`
-- Error classes are PascalCase with `Error` suffix: `PayloadNotFoundError`, `DecryptionError`, `IntegrityError`, `MessageTooLongError`, `RngUnavailableError`, `PayloadError`
-- `type` used for simple function-shaped aliases (`RandomBytes`), `interface` for object shapes (`Settings`, `KeyCacheStore`, `DecryptResult`)
-
-**React Components (UI):**
-- PascalCase for component functions: `Label`, `Input`, `Toggle`, `SettingsComponent`
-- Props interfaces are inline (no separate named type): `props: { text: string; hint?: string }`
+**Types:**
+- PascalCase interfaces and type aliases, without an `I` prefix: `Settings`, `KeyCacheStore`, `DecryptResult`.
+- Custom errors use PascalCase with an `Error` suffix: `PayloadError`, `IntegrityError`, `RngUnavailableError`.
 
 ## Code Style
 
 **Formatting:**
-- 4-space indentation (consistent throughout all `.ts`/`.tsx` files)
-- No trailing semicolons omitted — semicolons used everywhere
-- Double quotes for import paths (enforced by TypeScript/esbuild)
-- Template literals used for string interpolation
-- No explicit `prettier` or `biome` config file found — style is enforced by convention and TypeScript compilation
+- Four-space indentation, double-quoted import paths, required semicolons, and trailing commas in multiline constructs.
+- TypeScript source targets ES2020 for checking; `tsconfig.json` has `strict: true`, `noEmit: true`, and `moduleResolution: "Bundler"`.
+- No formatter configuration was found; style is maintained by existing source conventions.
 
 **Linting:**
-- No `.eslintrc` or `eslint.config.*` present — no automated lint step
-- TypeScript `strict: true` in `tsconfig.json` is the primary static gate
-- `noUnusedLocals: false` — unused locals are tolerated
-- `skipLibCheck: true` — only the project's own files are strictly type-checked
+- No ESLint/Prettier configuration or lint script exists.
+- Static validation is primarily TypeScript checking configuration plus build-time esbuild/SWC guards in `scripts/build.mjs`.
 
 ## Import Organization
 
-**Order (observed pattern):**
-1. Node built-ins first when present (e.g. `import { webcrypto } from "node:crypto"` in test harness)
-2. External npm packages (e.g. `@noble/hashes`, `@noble/ciphers`, `fflate`, `stegcloak-rs`)
-3. Internal project modules — crypto layer first, then core, then util, then discord/ui
-4. No barrel/index files; all imports are direct module-path imports
+**Order:**
+1. External packages such as `@noble/*` and `fflate`.
+2. Relative internal modules.
+3. `import type` is used when a dependency is type-only, for example in `src/core/encrypt.ts`.
 
-**Path style:**
-- Relative paths only for internal imports: `"../crypto/argon"`, `"./keycache"`, `"../stego/zwc"`
-- No path aliases (`@/`, `~`, etc.) — `tsconfig.json` has no `paths` mapping
-- `node:` protocol prefix used for Node built-ins in scripts and test harness
+**Grouping:**
+- Imports are generally contiguous and grouped by dependency role; there is no enforced alphabetical sorter.
 
-**`import type` usage:**
-- Used when importing only a type, not a value: `import type { RandomBytes } from "./stegcloak"`, `import type { KeyCacheStore } from "./core/keycache"`
+**Path Aliases:**
+- None. Internal imports use relative paths only.
 
 ## Error Handling
 
-**Error taxonomy pattern:**
-- Custom `Error` subclasses with `name` property set to the class name in the constructor
-- Each error class lives in the module it belongs to (not a shared errors file)
-- Error classes are exported from their declaring module: `PayloadNotFoundError`, `DecryptionError`, `IntegrityError` from `src/core/stegcloak.ts`; `MessageTooLongError` from `src/core/encrypt.ts`; `PayloadError` from `src/core/payload.ts`; `RngUnavailableError` from `src/crypto/random.ts`
+**Patterns:**
+- Domain failures throw custom errors at protocol boundaries; expected cache/decryption misses return `null` in hot-path APIs such as `getCachedKey` and `decryptWithCachedKeys`.
+- Async work uses `async`/`await` and local `try`/`catch`; promise catches are used at fire-and-forget boundaries in Discord hooks.
+- Host/plugin boundaries are defensive: `src/index.ts` wraps subsystem initialization in `safe()`, and patch teardown is best-effort.
 
-**Typed error re-throws:**
-- Catch-and-rethrow converts low-level errors into domain errors:
-  ```typescript
-  try {
-      ({ nonce, ctAndTag } = unframe(payloadBytes));
-  } catch (e) {
-      if (e instanceof PayloadError) throw new IntegrityError(e.message);
-      throw e;
-  }
-  ```
-
-**Typed unknown cast:**
-- Unknown `catch` parameters are cast inline: `(e as Error).message ?? String(e)` or `(e as Error)?.message`
-
-**Empty catch for don't-care errors:**
-- Used deliberately on hot-path teardown calls and vendetta API calls that can never be observed:
-  ```typescript
-  } catch {
-      /* ignore */
-  }
-  ```
-- Also used in `index.ts` for vendetta logger calls where logging failure must not block the plugin
-
-**`noteError` for silent failure accounting:**
-- Side-effect functions that swallow errors in dispatch-hook paths call `noteError(kind, e)` from `src/core/health.ts` instead of throwing, so counters accumulate and are visible via `/encrypt status`
-
-**Null returns instead of throws on hot paths:**
-- Functions called synchronously from a Flux dispatch hook (`decryptWithCachedKeys`, `getCachedKey`) return `null` on miss rather than throwing, because throwing inside a Flux hook has unpredictable side effects
+**Error Types:**
+- Invalid payloads, authentication failures, decompression failures, message limits, and RNG availability have distinct errors in `src/core/payload.ts`, `src/core/stegcloak.ts`, `src/core/encrypt.ts`, and `src/crypto/random.ts`.
+- Hot dispatch hooks do not throw; failures are recorded through `noteError` in `src/core/health.ts` or logged at the boundary.
 
 ## Logging
 
 **Framework:**
-- `vendetta.logger.log/error` for plugin-level structured logs
-- `vendetta.ui.toasts.showToast` for user-visible feedback
-- No `console.log` in `src/` — all user feedback goes through toasts
-- `console.log`/`console.error` used only in `tests/harness.ts` for test output
+- Production/plugin diagnostics use host-injected `vendetta.logger.log` and `vendetta.logger.error`; user-visible feedback uses `vendetta.ui.toasts.showToast` through wrappers in `src/discord/metro.ts` and `src/ui/Settings.tsx`.
+- `console` output is confined to `tests/harness.ts`.
 
-**Toast helper:**
-- `showToast` wrapper defined in `src/discord/metro.ts` silently swallows vendetta API failures; `src/ui/Settings.tsx` has its own local copy for the same reason
-
-**Pattern:**
-- Errors visible to the user are shown as toasts with a `"GoofCrypt: "` prefix
-- Errors visible to developers are logged with `vendetta.logger.error`
-- Silent errors in hot paths accumulate via `noteError` in `src/core/health.ts`
+**Patterns:**
+- Logging is guarded with `try`/`catch` so host logger failures cannot break plugin execution.
+- Messages use the `GoofCrypt:` prefix; diagnostic messages use `GoofCrypt[diag]`.
+- Silent hot-path failures accumulate counters via `src/core/health.ts` and are surfaced by the command layer.
 
 ## Comments
 
-**Module-level JSDoc blocks:**
-- Every source file begins with a `/** ... */` block describing purpose, wire-format alignment, and any caveats
-- These blocks are the primary documentation; no separate README per module
-- Format: concise prose, no `@param`/`@returns` tags except in specific complex functions
+**When to Comment:**
+- Every source module starts with a purpose/protocol/caveat header. Comments explain wire-format compatibility, Hermes limitations, security tradeoffs, or non-obvious workarounds.
+- Comments commonly cite the corresponding `stegcloak-rs` behavior and explain why a guard exists.
 
-**Inline comments:**
-- Used liberally to explain protocol choices, format constraints, and non-obvious guard conditions
-- Single-line `//` style; no block `/* */` for inline use
-- Comments often reference the upstream Rust source (`stegcloak-rs src/encrypt.rs`) to explain byte-format requirements
+**JSDoc/TSDoc:**
+- Concise module and function comments are used selectively; formal `@param`/`@returns` tags are uncommon and reserved for complex cases.
 
-**Security caveats:**
-- Security limitations are documented inline in the relevant module (e.g. `src/core/keycache.ts` documents that persisted keys are plaintext JSON)
+**TODO Comments:**
+- No consistent TODO tracking convention was found; issue-specific phase/spike references appear in comments and build/test guards.
 
 ## Function Design
 
 **Size:**
-- Functions are short (typically 5–20 lines); no function exceeds ~30 lines
-- Complex orchestration functions (`onLoad`, `execute`, `backgroundDecrypt`) remain readable through descriptive local variable names and comments
+- Functions are generally short (roughly 5–30 lines), with orchestration kept readable through named helpers such as `backgroundDecrypt` and `safe`.
 
 **Parameters:**
-- Explicit typed parameters; no `options` objects used
-- Boolean flags avoided in public APIs (prefer separate functions or caller control)
-- `rng: RandomBytes` injected as a parameter in pure pipeline functions to keep them testable without side effects
+- Public APIs use explicit typed parameters rather than generic options objects; injected RNG parameters keep crypto pipelines testable.
 
-**Return values:**
-- Functions return `T | null` rather than throwing when a miss is expected (`getCachedKey`, `decryptWithCachedKeys`, `selfTest`)
-- Async functions return `Promise<T>` explicitly; async/await used throughout (no raw `.then` chains except `finally` cleanup)
+**Return Values:**
+- Expected misses return `T | null` or `undefined`; guard clauses are common. Async APIs explicitly return `Promise<T>`.
 
 ## Module Design
 
 **Exports:**
-- Named exports only; no barrel `index.ts` re-exports
-- Only `src/index.ts` uses `export default` (the plugin entry object)
-- Re-export used once: `export { isCloaked }` in `src/core/stegcloak.ts` to give consumers a single import point
+- Named exports are the default. Only `src/index.ts` has the plugin's default export; it exposes lifecycle functions and the settings screen.
+- State is encapsulated behind accessors and lifecycle functions rather than exporting mutable singletons.
 
-**Module-level singletons:**
-- Mutable state initialized lazily and exported only via accessor functions: `settings()`, `getCachedKey()`, `secureRngAvailable()`
-- Raw singleton variables (`store`, `mem`, `rngFn`) are `let` at module scope, not exported
-
-**`const` vs `let`:**
-- `const` for all constants, imports, and computed values
-- `let` only for module-level mutable state singletons or loop accumulators
-- `as const` applied to literal objects that must not be widened: `OPTS`, `ASYNC_OPTS`
+**Barrel Files:**
+- No barrel modules. The import graph is intentionally layered and avoids circular dependencies: Discord → core → crypto/stego/util.
 
 ---
 
-*Convention analysis: 2026-05-30*
+*Convention analysis: 2026-07-18*
+*Update when patterns change*
