@@ -7,6 +7,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "test": "node --experimental-wasm-stringref scripts/test.mjs",
+    "test:remote-kdf-stage5": "bun test tests/remoteKdfStage5.test.mjs",
     "derive": "tsx tools/derive-keys.mjs"
   },
   "dependencies": {
