@@ -17,8 +17,41 @@ import { conceal, extract } from "../src/stego/zwc";
 // Wave-0 CI assertions ([7]-[9]): ProbeReport schema, nextTick caret tripwire, D-09 vector.
 import { nextTick } from "@noble/hashes/utils";
 import { deriveKey } from "../src/crypto/argon";
+import { fromBase64, toBase64 } from "../src/util/base64";
+import {
+    KDF_ERROR_CODES,
+    KDF_ERROR_STATUS,
+    MAX_CLOUD_KEY_UTF8_BYTES,
+    MAX_KDF_KEYS,
+    createDeriveRequest,
+    parseDeriveRequest,
+    parseDeriveResponse,
+    parseErrorResponse,
+    parseRevisionResponse,
+} from "../src/cloud/contracts";
 import type { ProbeReport } from "../src/settings";
 import { initSettings, DEFAULTS } from "../src/settings";
+
+interface ArgonVector {
+    version: number;
+    algorithm: string;
+    argonVersion: number;
+    memoryKiB: number;
+    passes: number;
+    parallelism: number;
+    outputBytes: number;
+    passwordEncoding: string;
+    saltEncoding: string;
+    password: string;
+    channelId: string;
+    keyHex: string;
+    keyBase64: string;
+}
+
+const ARGON_VECTOR = JSON.parse(readFileSync(
+    "tests/fixtures/remoteKdf/argon2id-v1.json",
+    "utf8",
+)) as ArgonVector;
 
 const rng = (n: number) => {
     const b = new Uint8Array(n);
@@ -40,7 +73,13 @@ function check(name: string, cond: boolean, detail = "") {
     }
 }
 
-const CHANNEL = "1234567890123456789"; // snowflake-shaped salt
+function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+}
+
+const CHANNEL = ARGON_VECTOR.channelId; // snowflake-shaped salt
 
 interface Case {
     name: string;
@@ -97,7 +136,7 @@ console.log("\n[4] conceal/extract round-trip identity");
     let badLen = -1;
     for (let i = 0; i < 2000; i++) {
         const buf = rng(((Math.random() * 256) | 0) + 1);
-        if (Buffer.compare(Buffer.from(buf), Buffer.from(extract(conceal(buf)))) !== 0) {
+        if (!equalBytes(buf, extract(conceal(buf)))) {
             ok = false;
             badLen = buf.length;
             break;
@@ -215,20 +254,30 @@ console.log("\n[9] D-09 reference-key vector (SPIKE-04 honest-verdict CI target)
     // — the same sync noble path that [1]/[2] already prove byte-compatible with
     // stegcloak-rs. NOTE: Phase-2 GATE-01 turns this into a structural gate; Phase 1
     // commits only the reference VALUE so downstream plans build against a fixed target.
-    const VEC_PW = "goofcryptspikevector";
-    // Committed 32-byte expected vector — captured once from deriveKey(VEC_PW, CHANNEL).
-    const EXPECTED = new Uint8Array([
-        88, 212, 83, 25, 57, 47, 174, 59, 190, 19, 9, 128, 131, 89, 130, 17,
-        233, 183, 232, 77, 56, 210, 16, 176, 20, 165, 100, 68, 226, 205, 232, 4,
-    ]);
+    const VEC_PW = ARGON_VECTOR.password;
+    const EXPECTED = fromBase64(ARGON_VECTOR.keyBase64);
     const key = deriveKey(VEC_PW, CHANNEL);
-    // Hermes-safe index-loop comparator (mirrors selfTest.ts eqBytes).
-    function eqBytes(a: Uint8Array, b: Uint8Array): boolean {
-        if (a.length !== b.length) return false;
-        for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-        return true;
-    }
-    check("deriveKey(VEC_PW, CHANNEL) equals committed 32-byte vector", key.length === 32 && eqBytes(key, EXPECTED), `got [${Array.from(key).slice(0, 4).join(",")}…]`);
+    let expectedHex = "";
+    for (let i = 0; i < EXPECTED.length; i++) expectedHex += EXPECTED[i].toString(16).padStart(2, "0");
+    check(
+        "Argon fixture freezes exact GoofCord parameters and encodings",
+        ARGON_VECTOR.version === 1
+            && ARGON_VECTOR.algorithm === "argon2id"
+            && ARGON_VECTOR.argonVersion === 19
+            && ARGON_VECTOR.memoryKiB === 65536
+            && ARGON_VECTOR.passes === 3
+            && ARGON_VECTOR.parallelism === 1
+            && ARGON_VECTOR.outputBytes === 32
+            && ARGON_VECTOR.passwordEncoding === "utf8-exact-no-normalization"
+            && ARGON_VECTOR.saltEncoding === "utf8-exact-no-normalization",
+        "fixture metadata drifted",
+    );
+    check(
+        "Argon fixture key encodings are canonical and identical",
+        expectedHex === ARGON_VECTOR.keyHex && toBase64(EXPECTED) === ARGON_VECTOR.keyBase64,
+        "fixture key encoding mismatch",
+    );
+    check("deriveKey(VEC_PW, CHANNEL) equals committed 32-byte vector", key.length === 32 && equalBytes(key, EXPECTED), `got [${Array.from(key).slice(0, 4).join(",")}…]`);
     // Cross-check the vector is from the byte-compat path (not a typo) by round-tripping
     // the SAME password+channel through the stegcloak-rs reference instance.
     check(
@@ -288,5 +337,85 @@ console.log("\n[10] Kettu null-hostile storage proxy (SPIKE-03 on-device init-cr
     check("control: assigning null to the proxy does throw (mechanism confirmed)", nullThrew);
 }
 
+console.log("\n[11] Remote KDF v1 contracts (strict mobile boundary)");
+{
+    const revision = "A".repeat(43);
+    const key1 = ARGON_VECTOR.keyBase64;
+    const key2 = `${"A".repeat(43)}=`;
+    const validResponse = {
+        version: 1,
+        settingsRevision: revision,
+        keys: [{ slot: 0, key: key1 }, { slot: 1, key: key2 }],
+    };
+
+    check("derive request accepts exact minimum bounds", createDeriveRequest("1", "x").ok);
+    check(
+        "derive request counts cloud-key UTF-8 bytes",
+        createDeriveRequest("9".repeat(20), "é".repeat(MAX_CLOUD_KEY_UTF8_BYTES / 2)).ok
+            && !createDeriveRequest("1", "é".repeat((MAX_CLOUD_KEY_UTF8_BYTES / 2) + 1)).ok,
+    );
+    const invalidChannels = ["", "1".repeat(21), "-1", "1.0", "１２３", "1e3"];
+    let channelsRejected = true;
+    for (let i = 0; i < invalidChannels.length; i++) {
+        if (createDeriveRequest(invalidChannels[i], "x").ok) channelsRejected = false;
+    }
+    check("derive request rejects non-decimal or out-of-bound channel strings", channelsRejected);
+    check("derive request rejects an empty cloud key", !createDeriveRequest("1", "").ok);
+    check(
+        "request parser rejects account selectors and parameter overrides",
+        parseDeriveRequest({ version: 1, channelId: "123", cloudEncryptionKey: "key" }).ok
+            && !parseDeriveRequest({ version: 1, channelId: "123", cloudEncryptionKey: "key", userId: "victim" }).ok
+            && !parseDeriveRequest({ version: 1, channelId: "123", cloudEncryptionKey: "key", m: 8 }).ok,
+    );
+    check("derive response accepts ordered multiple slots", parseDeriveResponse(validResponse).ok);
+
+    const invalidResponses: unknown[] = [
+        { ...validResponse, keys: [] },
+        { ...validResponse, keys: new Array(MAX_KDF_KEYS + 1).fill(0).map((_, slot) => ({ slot, key: key1 })) },
+        { ...validResponse, keys: [{ slot: 1, key: key1 }] },
+        { ...validResponse, keys: [{ slot: 0, key: key1 }, { slot: 0, key: key2 }] },
+        { ...validResponse, keys: [{ slot: 0, key: key1 }, { slot: 2, key: key2 }] },
+        { ...validResponse, keys: [{ slot: 0, key: key1.slice(0, -1) }] },
+        { ...validResponse, keys: [{ slot: 0, key: `${key1.slice(0, -1)}!` }] },
+        { ...validResponse, keys: [{ slot: 0, key: toBase64(new Uint8Array(31)) }] },
+        { ...validResponse, extra: true },
+    ];
+    let responsesRejected = true;
+    for (let i = 0; i < invalidResponses.length; i++) {
+        if (parseDeriveResponse(invalidResponses[i]).ok) responsesRejected = false;
+    }
+    check("derive response rejects malformed keys, slots, counts, and extras", responsesRejected);
+    check(
+        "revision response requires exact unpadded base64url SHA-256 shape",
+        parseRevisionResponse({ version: 1, settingsRevision: revision }).ok
+            && !parseRevisionResponse({ version: 1, settingsRevision: `${revision}=` }).ok
+            && !parseRevisionResponse({ version: 1, settingsRevision: revision, extra: true }).ok,
+    );
+    check(
+        "error codes retain the fixed HTTP mapping",
+        JSON.stringify(KDF_ERROR_CODES) === JSON.stringify([
+            "INVALID_REQUEST", "UNAUTHORIZED", "CLOUD_SETTINGS_MISSING", "PASSWORDS_NOT_SYNCED",
+            "CLOUD_DECRYPT_FAILED", "KDF_BUSY", "KDF_FAILED",
+        ])
+            && KDF_ERROR_STATUS.INVALID_REQUEST === 400
+            && KDF_ERROR_STATUS.UNAUTHORIZED === 401
+            && KDF_ERROR_STATUS.CLOUD_SETTINGS_MISSING === 404
+            && KDF_ERROR_STATUS.PASSWORDS_NOT_SYNCED === 409
+            && KDF_ERROR_STATUS.CLOUD_DECRYPT_FAILED === 422
+            && KDF_ERROR_STATUS.KDF_BUSY === 429
+            && KDF_ERROR_STATUS.KDF_FAILED === 500,
+    );
+    let errorsAccepted = true;
+    for (let i = 0; i < KDF_ERROR_CODES.length; i++) {
+        if (!parseErrorResponse({ version: 1, error: { code: KDF_ERROR_CODES[i] } }).ok) errorsAccepted = false;
+    }
+    check(
+        "error parser accepts only exact stable-code responses",
+        errorsAccepted
+            && !parseErrorResponse({ version: 1, error: { code: "WRONG_KEY" } }).ok
+            && !parseErrorResponse({ version: 1, error: { code: "KDF_FAILED", detail: "secret" } }).ok,
+    );
+}
+
 console.log(`\n${failed === 0 ? "✅" : "❌"} harness: ${passed} passed, ${failed} failed\n`);
-process.exit(failed === 0 ? 0 : 1);
+if (failed !== 0) throw new Error(`${failed} harness checks failed`);
