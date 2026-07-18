@@ -91,7 +91,11 @@ closes the cold coordinator before aborting transport.
 
 Node tests and an eval-safe bundle do not prove React Native networking
 semantics. Before remote cold-path operation is shipped on devices, Stage 5 must
-record controlled Android and iOS Kettu/Hermes evidence that:
+record controlled Android Kettu/Hermes evidence that:
+
+Kettu does not exist on iOS, so iOS device evidence is not part of this release
+gate. Any future iOS client would require its own transport validation and could
+not inherit Android evidence.
 
 - [ ] `redirect: "error"` does not follow controlled 307 or 308 responses for a
   derive request containing the raw token and cloud key.

@@ -6,6 +6,11 @@
 - **Server:** the separately maintained `goofcord-cloudserver` fork
 - **Compatibility target:** current GoofCord/stegcloak-rs message format
 
+**Platform applicability:** Kettu currently exists only on Android, so all
+Kettu real-device acceptance in this architecture is Android-only. References
+to iOS secure storage are hypothetical future-client considerations and do not
+create an iOS Kettu release requirement.
+
 ## Goal Mode handoff
 
 This document is the canonical implementation handoff for the remote-KDF work.

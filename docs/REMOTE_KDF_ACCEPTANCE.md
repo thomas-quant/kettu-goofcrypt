@@ -13,7 +13,8 @@ does not authorize a weaker transport fallback.
 | Status | Meaning |
 |---|---|
 | `PASS_AUTOMATED` | The cited direct test or static gate passed in the rerun below. |
-| `PENDING_DEVICE` | Real Android and iOS Kettu/Hermes evidence has not been recorded. |
+| `PENDING_DEVICE` | Real Android Kettu/Hermes evidence has not been recorded for an applicable check. |
+| `NOT_APPLICABLE` | The platform/client combination does not exist in the scoped runtime; this is neither a pass nor pending evidence. |
 | `FAIL` | The cited requirement or gate failed. |
 
 Node, Bun, source inspection, and a class-free bundle can produce only
@@ -101,28 +102,32 @@ previously missing real server-to-mobile success bridge.
 
 ## Physical-device release ledger
 
-Every row below requires evidence from both supported physical platforms. No
-current automated result closes a row, and no row may be changed without a
-device/build identifier, observed result, and captured redacted evidence.
+Kettu does not exist on iOS, so the current Kettu release gate applies only to
+Android. The iOS column is retained to record that scope explicitly; its
+`NOT_APPLICABLE` cells are neither passes nor pending evidence. No current
+automated result closes an Android row, and no Android row may be changed
+without a device/build identifier, observed result, and captured redacted
+evidence.
 
 | ID | Physical check and required evidence | Android | iOS |
 |---|---|---|---|
-| `DEV-01` | Authentication UX: import an existing raw token, verify configured/redacted status, and complete a derive without exposing the token or cloud key. | `PENDING_DEVICE` | `PENDING_DEVICE` |
-| `DEV-02` | Session-only cloud key: set and use it, unload/reload and process-restart, then prove it is absent and must be re-entered while persistent credentials/cache behavior remains accurately shown. | `PENDING_DEVICE` | `PENDING_DEVICE` |
-| `DEV-03` | Multiple rapid incoming messages/history loads: one remote operation, bounded visible behavior, successful local redispatches, and remaining failures left as ciphertext. | `PENDING_DEVICE` | `PENDING_DEVICE` |
-| `DEV-04` | Multiple rapid send/edit attempts: each cold attempt retains composer text and rejects without sending; one readiness notice appears; only an explicit resend encrypts. | `PENDING_DEVICE` | `PENDING_DEVICE` |
-| `DEV-05` | Wrong cloud key UX: stable safe error, no reflected secret, no local Argon/manual fallback, no plaintext send, and later corrected key can retry. | `PENDING_DEVICE` | `PENDING_DEVICE` |
-| `DEV-06` | Missing cloud passwords UX: stable `PASSWORDS_NOT_SYNCED` guidance, ciphertext/text retained, and no silent downgrade. | `PENDING_DEVICE` | `PENDING_DEVICE` |
-| `DEV-07` | Server unavailable/timeout UX: bounded wait/cooldown, stable safe message, ciphertext/composer retention, and no plaintext/manual fallback. | `PENDING_DEVICE` | `PENDING_DEVICE` |
-| `DEV-08` | Restart cache hits: current cached keys decrypt and send only under the documented revision-freshness policy; old cached revisions decrypt only; the cloud key remains absent. | `PENDING_DEVICE` | `PENDING_DEVICE` |
-| `DEV-09` | Controlled 307 and 308 derive redirects: `redirect: "error"` does not follow either response and the raw token/cloud key never reaches the redirect target. | `PENDING_DEVICE` | `PENDING_DEVICE` |
-| `DEV-10` | Timeout abort: cancel an active fetch and an active response-body read, with no late commit, dispatch, toast, or secret reflection. | `PENDING_DEVICE` | `PENDING_DEVICE` |
-| `DEV-11` | Configuration replacement abort: cancel an active fetch and active body read; the old result cannot cross the new configuration generation. | `PENDING_DEVICE` | `PENDING_DEVICE` |
-| `DEV-12` | Plugin-unload abort: cancel active fetch/body work and prove no late cache/readiness/dispatch/toast plus no retained session key. | `PENDING_DEVICE` | `PENDING_DEVICE` |
-| `DEV-13` | Runtime-selected streaming or canonical declared-length mode: record the actual mode and prove exact 16,384-byte acceptance plus one-byte-over rejection/cancellation. | `PENDING_DEVICE` | `PENDING_DEVICE` |
-| `DEV-14` | Missing or incomplete response capabilities: fail as `REMOTE_UNSUPPORTED` before network/body read, with no XHR, redirect-following, or unbounded fallback. | `PENDING_DEVICE` | `PENDING_DEVICE` |
+| `DEV-01` | Authentication UX: import an existing raw token, verify configured/redacted status, and complete a derive without exposing the token or cloud key. | `PENDING_DEVICE` | `NOT_APPLICABLE` |
+| `DEV-02` | Session-only cloud key: set and use it, unload/reload and process-restart, then prove it is absent and must be re-entered while persistent credentials/cache behavior remains accurately shown. | `PENDING_DEVICE` | `NOT_APPLICABLE` |
+| `DEV-03` | Multiple rapid incoming messages/history loads: one remote operation, bounded visible behavior, successful local redispatches, and remaining failures left as ciphertext. | `PENDING_DEVICE` | `NOT_APPLICABLE` |
+| `DEV-04` | Multiple rapid send/edit attempts: each cold attempt retains composer text and rejects without sending; one readiness notice appears; only an explicit resend encrypts. | `PENDING_DEVICE` | `NOT_APPLICABLE` |
+| `DEV-05` | Wrong cloud key UX: stable safe error, no reflected secret, no local Argon/manual fallback, no plaintext send, and later corrected key can retry. | `PENDING_DEVICE` | `NOT_APPLICABLE` |
+| `DEV-06` | Missing cloud passwords UX: stable `PASSWORDS_NOT_SYNCED` guidance, ciphertext/text retained, and no silent downgrade. | `PENDING_DEVICE` | `NOT_APPLICABLE` |
+| `DEV-07` | Server unavailable/timeout UX: bounded wait/cooldown, stable safe message, ciphertext/composer retention, and no plaintext/manual fallback. | `PENDING_DEVICE` | `NOT_APPLICABLE` |
+| `DEV-08` | Restart cache hits: current cached keys decrypt and send only under the documented revision-freshness policy; old cached revisions decrypt only; the cloud key remains absent. | `PENDING_DEVICE` | `NOT_APPLICABLE` |
+| `DEV-09` | Controlled 307 and 308 derive redirects: `redirect: "error"` does not follow either response and the raw token/cloud key never reaches the redirect target. | `PENDING_DEVICE` | `NOT_APPLICABLE` |
+| `DEV-10` | Timeout abort: cancel an active fetch and an active response-body read, with no late commit, dispatch, toast, or secret reflection. | `PENDING_DEVICE` | `NOT_APPLICABLE` |
+| `DEV-11` | Configuration replacement abort: cancel an active fetch and active body read; the old result cannot cross the new configuration generation. | `PENDING_DEVICE` | `NOT_APPLICABLE` |
+| `DEV-12` | Plugin-unload abort: cancel active fetch/body work and prove no late cache/readiness/dispatch/toast plus no retained session key. | `PENDING_DEVICE` | `NOT_APPLICABLE` |
+| `DEV-13` | Runtime-selected streaming or canonical declared-length mode: record the actual mode and prove exact 16,384-byte acceptance plus one-byte-over rejection/cancellation. | `PENDING_DEVICE` | `NOT_APPLICABLE` |
+| `DEV-14` | Missing or incomplete response capabilities: fail as `REMOTE_UNSUPPORTED` before network/body read, with no XHR, redirect-following, or unbounded fallback. | `PENDING_DEVICE` | `NOT_APPLICABLE` |
 
-Release status remains **DEVICE_PENDING** until every applicable Android and iOS
-row has real evidence. A device failure must keep remote operation disabled or
-fail closed; it does not authorize relaxing redirect, abort, response-bound,
-secret-storage, or no-downgrade requirements.
+Release status remains **DEVICE_PENDING** until all 14 applicable Android rows
+have real evidence. The 14 iOS rows are not applicable and do not reduce that
+gate. A device failure must keep remote operation disabled or fail closed; it
+does not authorize relaxing redirect, abort, response-bound, secret-storage, or
+no-downgrade requirements.
