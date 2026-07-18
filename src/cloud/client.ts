@@ -29,6 +29,9 @@ export const REMOTE_CLIENT_ERROR_CODES = [
     "REMOTE_PROTOCOL_ERROR",
     "REMOTE_UNSUPPORTED",
     "REMOTE_STALE",
+    "REMOTE_COOLDOWN",
+    "REMOTE_SLOT_UNAVAILABLE",
+    "REMOTE_SEND_REJECTED",
 ] as const;
 
 export type RemoteClientErrorCode = typeof REMOTE_CLIENT_ERROR_CODES[number];

@@ -29,7 +29,7 @@ It's a Vendetta-format plugin.
   decrypted in place and shown with a 🔒 prefix.
 - **Sending**: turn encryption on with the `/encrypt` command (or the settings
   toggle), then send normally. Your message is hidden inside the cover text.
-  - `/encrypt on` · `off` · `toggle` · `cycle` (next password) · `status`
+  - `/encrypt on` · `off` · `toggle` · `mode-manual` · `mode-remote` · `status`
 
 Passwords, cover, and the displayed mark are configured in the plugin's settings
 page. The salt is the Discord channel ID (same as GoofCord), so a key is derived
@@ -53,12 +53,32 @@ or the "Import keys" field in the plugin settings.
 Without key-sync it still works — the first message in each chat just shows a
 "deriving key…" toast and takes ~10s once.
 
-## Remote KDF setup (Stage 3 preview)
+## Remote KDF mode (Stage 4 opt-in)
 
-The settings screen can prepare and verify an existing GoofCord cloud account
-for a future remote cold-channel path. This Stage 3 preview does **not** change
-live sending or receiving: those hooks still use the manual password/key-sync
-pipeline above until Stage 4.
+Manual mode remains the default for existing and new installations. Remote mode
+is an explicit separate key source selected in settings or with
+`/encrypt mode-remote`; it never silently falls back to manual passwords, local
+Argon2, a different remote slot, or plaintext. `/encrypt mode-manual` switches
+back deliberately. The remote send slot is the exact 0-based GoofCord password
+position and can be set in settings or advanced with `remote-slot-next` after a
+current channel cache exists.
+
+On receive, GoofCrypt first verifies that zero-width content decodes to a
+complete supported frame. Only then may a cache miss start remote work. Current
+and at most two retained old revisions are tried locally, newest first and in
+stable server slot order; old revisions are decrypt-only. Multiple cold messages
+for one channel/revision share one request and a bounded waiting set. Successful
+messages are retried locally and updated; failures remain ciphertext. Actual
+derive failures enter a 30-second client cooldown so history loads cannot hammer
+the worker.
+
+On send, only the selected slot from the current send-capable revision is valid,
+and the authoritative revision check must be less than five minutes old. A hot
+key encrypts synchronously. A cold, missing, or stale key starts/joins preparation
+but **rejects that send immediately**, keeping the composer text unchanged. Wait
+for the ready notice and send again yourself. GoofCrypt never queues or
+automatically replays plaintext, preventing duplicates, reordering, and sends
+after intent changed.
 
 To prepare remote state, enter an HTTPS origin and your existing GoofCord raw
 32-character lowercase cloud token in the masked settings fields. Origins may
@@ -73,7 +93,10 @@ plugin storage. The cloud encryption key is different: it stays only in memory,
 must be re-entered after restart, and is cleared on replacement, remote
 configuration changes, forgetting credentials, and plugin unload. After setting
 it, use **Verify and refresh current channel** to prove the server can decrypt a
-password-bearing settings blob and populate that channel's ordered keys.
+password-bearing settings blob and populate that channel's ordered keys. A
+restart does not delete cached channel keys: cached incoming keys and a
+current/fresh selected send key can still work without the session cloud key;
+the key is requested again only when a new remote derive is needed.
 
 Remote status, channel refresh, revision check, and remote-cache clear are also
 available as `/encrypt` actions. Secret token/key values are deliberately
@@ -83,9 +106,12 @@ revisions per channel. Clearing it preserves remote credentials and every manual
 password/imported key; forgetting remote configuration removes the origin,
 token, session key, and remote cache while still preserving manual settings.
 
-If Kettu lacks the bounded fetch, abort, URL, or response-reading APIs required
-by the strict client, status reports `REMOTE_UNSUPPORTED` and no permissive
-fallback is attempted. Real-device redirect and abort semantics remain an
+Missing configuration/session key, invalid or expired token, missing/passwordless
+cloud settings, wrong cloud key, busy worker, timeout, unavailable service,
+malformed response, cooldown, stale state, and unavailable slot all reject
+explicitly without a source or plaintext downgrade. If Kettu lacks the bounded
+fetch, abort, URL, or response-reading APIs, status reports
+`REMOTE_UNSUPPORTED`. Real-device redirect and abort semantics remain an
 explicit Stage 5 verification gate; see
 [`docs/REMOTE_KDF_MOBILE_TRANSPORT.md`](docs/REMOTE_KDF_MOBILE_TRANSPORT.md).
 
@@ -93,7 +119,8 @@ explicit Stage 5 verification gate; see
 
 `on` · `off` · `toggle` · `cycle` (next password) · `status` · `bench` (time Argon2) ·
 `set:<passwords>` (set comma-separated passwords) · `import:<bundle>` (key-sync) ·
-`remote-status` · `remote-refresh` · `remote-check` · `remote-clear`.
+`mode-manual` · `mode-remote` · `remote-slot-next` · `remote-status` ·
+`remote-refresh` · `remote-check` · `remote-clear`.
 
 ## Security notes
 
@@ -108,8 +135,8 @@ explicit Stage 5 verification gate; see
 - Sending requires a secure random source for nonces. If none is found, sending is
   disabled (decryption still works). You can opt into an insecure `Math.random`
   fallback in settings, but it's off by default and not recommended.
-- Argon2id (64 MiB) runs once per (channel, password) on first use and is cached;
-  expect a brief one-time pause when first opening/encrypting a new conversation.
+- In manual mode, Argon2id (64 MiB) runs once per (channel, password) on first use
+  and is cached. Remote mode never calls the local Argon path on a message miss.
 
 ## Compatibility
 

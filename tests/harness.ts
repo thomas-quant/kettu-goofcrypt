@@ -32,6 +32,7 @@ import {
 import type { ProbeReport } from "../src/settings";
 import { initSettings, DEFAULTS } from "../src/settings";
 import { runRemoteKdfStage3Checks } from "./remoteKdfStage3";
+import { runRemoteKdfStage4Checks } from "./remoteKdfStage4";
 
 interface ArgonVector {
     version: number;
@@ -419,6 +420,7 @@ console.log("\n[11] Remote KDF v1 contracts (strict mobile boundary)");
 }
 
 await runRemoteKdfStage3Checks(check);
+await runRemoteKdfStage4Checks(check);
 
 console.log(`\n${failed === 0 ? "✅" : "❌"} harness: ${passed} passed, ${failed} failed\n`);
 if (failed !== 0) throw new Error(`${failed} harness checks failed`);

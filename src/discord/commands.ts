@@ -3,7 +3,16 @@
  * benchmark Argon2. Feedback via toast. Key warming is fire-and-forget async
  * (never blocks the UI).
  */
-import { settings, chosenPassword, cyclePassword, maskPassword, getPasswordList } from "../settings";
+import {
+    settings,
+    chosenPassword,
+    cyclePassword,
+    maskPassword,
+    getPasswordList,
+    keySource,
+    remoteSendSlot,
+    setRemoteSendSlot,
+} from "../settings";
 import { secureRngAvailable, rngSource } from "../crypto/random";
 import { deriveKey, isCached, importKeys } from "../core/keycache";
 import { benchOnceDetailed } from "../crypto/argon";
@@ -19,6 +28,12 @@ import {
     refreshRemoteRevision,
     remoteErrorMessage,
 } from "../cloud/remoteKdf";
+import { getRemoteSendKeys } from "../core/remoteKeycache";
+import {
+    changeKeySource,
+    remoteColdPathStatus,
+    resetRemoteColdPath,
+} from "./remoteColdPath";
 
 const STRING = 3; // ApplicationCommandOptionType.STRING
 
@@ -77,6 +92,9 @@ export function registerCommands(): void {
                     { name: "toggle (on/off)", displayName: "toggle (on/off)", value: "toggle" },
                     { name: "on", displayName: "on", value: "on" },
                     { name: "off", displayName: "off", value: "off" },
+                    { name: "mode: manual", displayName: "mode: manual", value: "mode-manual" },
+                    { name: "mode: remote", displayName: "mode: remote", value: "mode-remote" },
+                    { name: "remote: next send slot", displayName: "remote: next send slot", value: "remote-slot-next" },
                     { name: "cycle password", displayName: "cycle password", value: "cycle" },
                     { name: "bench (time Argon2)", displayName: "bench (time Argon2)", value: "bench" },
                     { name: "diag: probe (enumerate)", displayName: "diag: probe (enumerate)", value: "probe" },
@@ -178,7 +196,10 @@ export function registerCommands(): void {
 
             switch (action) {
                 case "remote-status":
-                    reply(channelId, `**GoofCrypt remote KDF**\n${formatRemoteKdfStatus()}\nStage 3 setup only; live messages still use the manual pipeline.`);
+                    reply(
+                        channelId,
+                        `**GoofCrypt remote KDF**\nmode ${keySource() ?? "invalid"} · send-slot ${remoteSendSlot() ?? "invalid"}\n${formatRemoteKdfStatus()}`,
+                    );
                     break;
                 case "remote-refresh":
                     if (!channelId) return void reply(channelId, "GoofCrypt: no current channel to refresh");
@@ -192,9 +213,33 @@ export function registerCommands(): void {
                         .catch((error) => reply(channelId, `GoofCrypt: ${remoteErrorMessage(error)}`));
                     break;
                 case "remote-clear":
+                    resetRemoteColdPath();
                     clearRemoteCache();
                     reply(channelId, "GoofCrypt: remote cache cleared; manual passwords, keys, and remote credentials kept");
                     break;
+                case "mode-manual":
+                case "mode-remote": {
+                    const nextMode = action === "mode-manual" ? "manual" : "remote";
+                    try {
+                        if (!changeKeySource(nextMode)) return void reply(channelId, "GoofCrypt: invalid message mode");
+                        reply(channelId, `GoofCrypt message mode → ${nextMode} (no fallback between sources)`);
+                    } catch {
+                        reply(channelId, "GoofCrypt: could not change message mode safely");
+                    }
+                    break;
+                }
+                case "remote-slot-next": {
+                    if (keySource() !== "remote") return void reply(channelId, "GoofCrypt: select remote message mode first");
+                    if (!channelId) return void reply(channelId, "GoofCrypt: no current channel for remote slots");
+                    const current = remoteSendSlot();
+                    if (current === null) return void reply(channelId, "GoofCrypt: remote send slot is invalid; repair it in settings");
+                    const keys = getRemoteSendKeys(channelId);
+                    if (!keys?.length) return void reply(channelId, "GoofCrypt: no current remote slots cached for this channel");
+                    const next = (current + 1) % keys.length;
+                    if (!setRemoteSendSlot(next)) return void reply(channelId, "GoofCrypt: remote send slot update rejected");
+                    reply(channelId, `GoofCrypt remote send slot → ${next} of ${keys.length}`);
+                    break;
+                }
                 case "bench":
                     reply(channelId, "GoofCrypt: timing Argon2 (this is the per-chat cost)…");
                     // Locked benchOnceDetailed contract (Plan 01-02 Task 2):
@@ -214,11 +259,20 @@ export function registerCommands(): void {
                     break;
                 case "on":
                 case "enable":
-                    if (getPasswordList().length === 0) return void reply(channelId, "GoofCrypt: set a password in plugin settings first");
+                    if (keySource() === null) return void reply(channelId, "GoofCrypt: repair the invalid message mode first");
+                    if (remoteSendSlot() === null) return void reply(channelId, "GoofCrypt: repair the invalid remote send slot first");
+                    if (keySource() === "manual" && getPasswordList().length === 0) {
+                        return void reply(channelId, "GoofCrypt: set a password in plugin settings first");
+                    }
                     if (!canEnable()) return void reply(channelId, "GoofCrypt: no secure RNG — cannot enable");
                     settings().enabled = true;
-                    warm(channelId);
-                    reply(channelId, `GoofCrypt ON — password ${maskPassword(chosenPassword())}`);
+                    if (keySource() === "manual") warm(channelId);
+                    reply(
+                        channelId,
+                        keySource() === "manual"
+                            ? `GoofCrypt ON — manual password ${maskPassword(chosenPassword())}`
+                            : `GoofCrypt ON — remote slot ${remoteSendSlot()} (cold sends are rejected until ready)`,
+                    );
                     break;
                 case "off":
                 case "disable":
@@ -226,6 +280,7 @@ export function registerCommands(): void {
                     reply(channelId, "GoofCrypt OFF");
                     break;
                 case "cycle": {
+                    if (keySource() !== "manual") return void reply(channelId, "GoofCrypt: switch to manual mode to cycle passwords");
                     const next = cyclePassword();
                     if (!next) return void reply(channelId, "GoofCrypt: no passwords configured");
                     warm(channelId);
@@ -233,24 +288,32 @@ export function registerCommands(): void {
                     break;
                 }
                 case "status":
+                    const cold = remoteColdPathStatus();
                     reply(
                         channelId,
                         `**GoofCrypt status**\n` +
                             `• state: ${settings().enabled ? "ON" : "OFF"}\n` +
+                            `• mode: ${keySource() ?? "INVALID"}\n` +
+                            `• remote send slot: ${remoteSendSlot() ?? "INVALID"}\n` +
                             `• passwords: ${getPasswordList().length} (raw ${settings().passwords.length} chars)\n` +
                             `• chosen: ${maskPassword(chosenPassword())}\n` +
                             `• RNG: ${secureRngAvailable() ? rngSource() : "none"}\n` +
                             `• health:${healthSummary() || " ok"}\n` +
+                            `• remote cold: ${cold.incomingOperations} receive/${cold.sendPreparations} send · waiting ${cold.waitingMessages}\n` +
                             `• remote: ${formatRemoteKdfStatus()}\n` +
                             `• ${probeSummary().replace(/^ · /, "")}`,
                     );
                     break;
                 default: // toggle
                     if (!settings().enabled && !canEnable()) return void reply(channelId, "GoofCrypt: no secure RNG — cannot enable");
-                    if (!settings().enabled && getPasswordList().length === 0) return void reply(channelId, "GoofCrypt: set a password first");
+                    if (!settings().enabled && keySource() === null) return void reply(channelId, "GoofCrypt: repair the invalid message mode first");
+                    if (!settings().enabled && remoteSendSlot() === null) return void reply(channelId, "GoofCrypt: repair the invalid remote send slot first");
+                    if (!settings().enabled && keySource() === "manual" && getPasswordList().length === 0) {
+                        return void reply(channelId, "GoofCrypt: set a password first");
+                    }
                     settings().enabled = !settings().enabled;
-                    if (settings().enabled) warm(channelId);
-                    reply(channelId, `GoofCrypt ${settings().enabled ? "ON" : "OFF"}`);
+                    if (settings().enabled && keySource() === "manual") warm(channelId);
+                    reply(channelId, `GoofCrypt ${settings().enabled ? "ON" : "OFF"} · mode ${keySource()}`);
                     break;
             }
         },

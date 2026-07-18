@@ -4,7 +4,12 @@
  * unreliable on-device — the same value set via `/encrypt set` works, so Save
  * mirrors that exact code path).
  */
-import { settings } from "../settings";
+import {
+    keySource,
+    remoteSendSlot,
+    setRemoteSendSlot,
+    settings,
+} from "../settings";
 import { secureRngAvailable, rngSource } from "../crypto/random";
 import { importKeys } from "../core/keycache";
 import { fromBase64 } from "../util/base64";
@@ -21,6 +26,10 @@ import {
     setRemoteSessionKey,
 } from "../cloud/remoteKdf";
 import { getCurrentChannelId } from "../discord/metro";
+import {
+    changeKeySource,
+    resetRemoteColdPath,
+} from "../discord/remoteColdPath";
 
 const React: any = vendetta.metro.common.React;
 const RN: any = vendetta.metro.common.ReactNative;
@@ -100,6 +109,8 @@ export function SettingsComponent() {
     const [remoteToken, setRemoteToken] = React.useState("");
     const [remoteCloudKey, setRemoteCloudKey] = React.useState("");
     const [allowRemoteHttp, setAllowRemoteHttp] = React.useState(s.remoteAllowInsecureLocalhost ?? false);
+    const [messageMode, setMessageMode] = React.useState(keySource());
+    const [sendSlot, setSendSlot] = React.useState(remoteSendSlot()?.toString() ?? "");
     const [remoteStatus, setRemoteStatus] = React.useState(formatRemoteKdfStatus());
     const rng = secureRngAvailable() ? rngSource() : "NONE — sending unavailable";
 
@@ -113,6 +124,7 @@ export function SettingsComponent() {
     const saveRemote = () => {
         const token = remoteToken.trim() || s.remoteAuthToken;
         try {
+            resetRemoteColdPath();
             saveRemoteConfiguration(remoteHost, token, allowRemoteHttp);
             showToast("GoofCrypt: remote configuration saved; session key cleared if configuration changed");
         } catch (error) {
@@ -124,6 +136,7 @@ export function SettingsComponent() {
 
     const setSessionKey = () => {
         try {
+            resetRemoteColdPath();
             setRemoteSessionKey(remoteCloudKey);
             showToast("GoofCrypt: session cloud key set; verify the current channel next");
         } catch (error) {
@@ -163,6 +176,28 @@ export function SettingsComponent() {
         showToast("GoofCrypt: settings saved");
     };
 
+    const changeMode = (value: "manual" | "remote") => {
+        try {
+            if (!changeKeySource(value)) throw new Error("invalid mode");
+            setMessageMode(value);
+            updateRemoteStatus();
+            showToast(`GoofCrypt: message mode set to ${value}; sources never fall back`);
+        } catch {
+            showToast("GoofCrypt: could not change message mode safely");
+        }
+    };
+
+    const saveSendSlot = () => {
+        const raw = sendSlot.trim();
+        const value = Number(raw);
+        if (!raw || !setRemoteSendSlot(value)) {
+            showToast("GoofCrypt: remote send slot must be an integer from 0 to 7");
+            return;
+        }
+        setSendSlot(String(value));
+        showToast(`GoofCrypt: remote send slot set to ${value}`);
+    };
+
     const doImport = () => {
         try {
             const obj = JSON.parse(utf8Decode(fromBase64(bundle.trim())));
@@ -183,6 +218,29 @@ export function SettingsComponent() {
                 onChange={(v) => (s.enabled = v)}
             />
 
+            <Label
+                text="Message key source"
+                hint="Manual is the migration default. Remote never falls back to manual passwords or plaintext when setup fails."
+            />
+            <RN.Text style={{ opacity: 0.75, fontSize: 12, color: "#fff", marginBottom: 8 }}>
+                Current mode: {messageMode ?? "INVALID — choose a mode"}
+            </RN.Text>
+            <RN.View style={{ flexDirection: "row", marginBottom: 8 }}>
+                <RN.View style={{ flex: 1, marginRight: 4 }}>
+                    <RN.Button title="Use manual mode" onPress={() => changeMode("manual")} />
+                </RN.View>
+                <RN.View style={{ flex: 1, marginLeft: 4 }}>
+                    <RN.Button title="Use remote mode" onPress={() => changeMode("remote")} />
+                </RN.View>
+            </RN.View>
+            <Label
+                text="Remote send slot"
+                hint="Exact GoofCord password position 0–7. Incoming remote messages try every current and retained old slot."
+            />
+            <Input value={sendSlot} onChange={setSendSlot} placeholder="0" />
+            <RN.View style={{ height: 8 }} />
+            <RN.Button title="Save remote send slot" onPress={saveSendSlot} />
+
             <Label text="Passwords" hint="Comma-separated. Share out-of-band; same as GoofCord." />
             <Input value={passwords} onChange={setPasswords} multiline />
             <RN.View style={{ height: 12 }} />
@@ -202,8 +260,8 @@ export function SettingsComponent() {
 
             <RN.View style={{ height: 28 }} />
             <Label
-                text="Remote KDF (Stage 3 setup)"
-                hint="Prepares and verifies remote channel keys. Live messages still use the existing manual pipeline until Stage 4."
+                text="Remote KDF (Stage 4 opt-in)"
+                hint="Cached keys work synchronously. Cold sends are rejected with text kept; wait for the ready notice, then send again yourself."
             />
             <Label text="Remote HTTPS origin" hint="An origin only, with no path. Direct HTTP is development-only for exact loopback hosts." />
             <Input value={remoteHost} onChange={setRemoteHost} placeholder="https://cloud.example.com" />
@@ -229,7 +287,7 @@ export function SettingsComponent() {
             <RN.View style={{ height: 18 }} />
             <Label
                 text="Session cloud encryption key"
-                hint="Memory-only and cleared on restart, unload, replacement, or remote configuration change."
+                hint="Memory-only and needed only for a new derive. Cached channel keys can still work after restart; this key clears on restart, unload, replacement, or configuration change."
             />
             <Input
                 value={remoteCloudKey}
@@ -243,6 +301,7 @@ export function SettingsComponent() {
             <RN.Button
                 title="Clear session cloud key"
                 onPress={() => {
+                    resetRemoteColdPath();
                     clearRemoteSessionKey();
                     setRemoteCloudKey("");
                     updateRemoteStatus();
@@ -255,12 +314,16 @@ export function SettingsComponent() {
             <RN.View style={{ height: 8 }} />
             <RN.Button title="Check remote revision" onPress={checkRemoteRevision} />
             <RN.View style={{ height: 12 }} />
+            <RN.Text style={{ opacity: 0.75, fontSize: 12, color: "#fff" }}>
+                Message mode {messageMode ?? "INVALID"} · remote send slot {remoteSendSlot() ?? "INVALID"}
+            </RN.Text>
             <RN.Text style={{ opacity: 0.75, fontSize: 12, color: "#fff" }}>{remoteStatus}</RN.Text>
 
             <RN.View style={{ height: 18 }} />
             <RN.Button
                 title="Clear remote channel-key cache (manual keys kept)"
                 onPress={() => {
+                    resetRemoteColdPath();
                     clearRemoteCache();
                     updateRemoteStatus();
                     showToast("GoofCrypt: remote cache cleared; manual passwords and keys kept");
@@ -270,6 +333,7 @@ export function SettingsComponent() {
             <RN.Button
                 title="Forget remote origin and token (manual settings kept)"
                 onPress={() => {
+                    resetRemoteColdPath();
                     forgetRemoteConfiguration();
                     setRemoteHost("");
                     setRemoteToken("");

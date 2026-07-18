@@ -1,6 +1,6 @@
 /**
  * Mobile remote-KDF coordinator: configuration, ordered mutation commits,
- * revision freshness, session readiness, and remote-only cache lifecycle.
+ * revision freshness, shared cold operations, cooldown, and cache lifecycle.
  */
 import {
     RemoteKdfError,
@@ -18,6 +18,7 @@ import {
     clearRemoteKeyCache,
     getRemoteAuthoritativeRevision,
     getRemoteRevisionCheckedAt,
+    getRemoteSendKey,
     initRemoteKeyCache,
     remoteKeyCacheCounts,
     storeRemoteDerivedKeys,
@@ -36,6 +37,7 @@ import {
 import type { Settings } from "../settings";
 
 export const REMOTE_REVISION_TTL_MS = 300000;
+export const REMOTE_FAILURE_COOLDOWN_MS = 30000;
 
 export interface RemoteKdfDependencies {
     clientFactory?: (configuration: RemoteClientConfiguration) => RemoteKdfClient;
@@ -52,9 +54,16 @@ export interface RemoteKdfStatus {
     revisionFresh: boolean;
     cachedChannels: number;
     cachedSets: number;
+    pendingOperations: number;
+    cooldowns: number;
     retention: number;
     ttlMs: number;
     lastCode?: RemoteKdfErrorCode;
+}
+
+interface RemoteCooldown {
+    until: number;
+    code: RemoteKdfErrorCode;
 }
 
 let store: Settings | null = null;
@@ -68,10 +77,20 @@ let nextRequestOrder = 0;
 let lastAppliedOrder = 0;
 let inFlightRevision: Promise<KdfRevisionResponse> | undefined;
 const inFlightDerives = new Map<string, Promise<KdfDeriveResponse>>();
+const inFlightSendPreparations = new Map<string, Promise<void>>();
+const cooldowns = new Map<string, RemoteCooldown>();
 let lastCode: RemoteKdfErrorCode | undefined;
 
 function errorCode(error: unknown): RemoteKdfErrorCode {
     return error instanceof RemoteKdfError ? error.code : "REMOTE_UNAVAILABLE";
+}
+
+function remoteError(error: unknown): RemoteKdfError {
+    return error instanceof RemoteKdfError ? error : new RemoteKdfError("REMOTE_UNAVAILABLE");
+}
+
+function rejected<T>(error: unknown): Promise<T> {
+    return Promise.reject(remoteError(error));
 }
 
 function fail(code: RemoteKdfErrorCode): never {
@@ -107,6 +126,8 @@ function invalidatePending(): void {
     client?.abortAll();
     inFlightRevision = undefined;
     inFlightDerives.clear();
+    inFlightSendPreparations.clear();
+    cooldowns.clear();
 }
 
 function applyLocalMutation(): void {
@@ -117,6 +138,47 @@ function applyLocalMutation(): void {
 
 function stale(): never {
     fail("REMOTE_STALE");
+}
+
+function operationKey(channelId: string): string {
+    return `${configGeneration}|${getRemoteAuthoritativeRevision() ?? "unknown"}|${channelId}`;
+}
+
+function sendPreparationKey(channelId: string, slot: number): string {
+    return `${operationKey(channelId)}|${slot}`;
+}
+
+function pruneCooldowns(timestamp = now()): void {
+    const entries = Array.from(cooldowns.entries());
+    for (let i = 0; i < entries.length; i++) {
+        if (entries[i][1].until <= timestamp) cooldowns.delete(entries[i][0]);
+    }
+}
+
+function shouldCooldown(code: RemoteKdfErrorCode): boolean {
+    switch (code) {
+        case "INVALID_REQUEST":
+        case "UNAUTHORIZED":
+        case "CLOUD_SETTINGS_MISSING":
+        case "PASSWORDS_NOT_SYNCED":
+        case "CLOUD_DECRYPT_FAILED":
+        case "KDF_BUSY":
+        case "KDF_FAILED":
+        case "REMOTE_TIMEOUT":
+        case "REMOTE_UNAVAILABLE":
+        case "REMOTE_PROTOCOL_ERROR":
+            return true;
+        default:
+            return false;
+    }
+}
+
+function generationActive(generation: number): boolean {
+    return !closed && generation === configGeneration;
+}
+
+function requireGeneration(generation: number): void {
+    if (!generationActive(generation)) stale();
 }
 
 export function initRemoteKdf(persisted: Settings, dependencies: RemoteKdfDependencies = {}): void {
@@ -191,8 +253,26 @@ export function clearRemoteSessionKey(): void {
     applyLocalMutation();
 }
 
+/**
+ * Cancel mode-owned work without deleting either persistent cache, credentials,
+ * or the memory-only cloud key. Generation/order gates reject every late result.
+ */
+export function invalidateRemoteOperations(): void {
+    requireStore();
+    invalidatePending();
+    configGeneration += 1;
+    applyLocalMutation();
+    clearRemoteVerification();
+    lastCode = undefined;
+}
+
 export function refreshRemoteRevision(force = true): Promise<KdfRevisionResponse> {
-    const remote = activeClient();
+    let remote: RemoteKdfClient;
+    try {
+        remote = activeClient();
+    } catch (error) {
+        return rejected(error);
+    }
     const currentRevision = getRemoteAuthoritativeRevision();
     const checkedAt = getRemoteRevisionCheckedAt();
     const timestamp = now();
@@ -213,7 +293,7 @@ export function refreshRemoteRevision(force = true): Promise<KdfRevisionResponse
     const pending = (async () => {
         try {
             const response = await remote.revision();
-            if (closed || generation !== configGeneration || order <= lastAppliedOrder) stale();
+            if (!generationActive(generation) || order <= lastAppliedOrder) stale();
             const applied = applyRemoteRevision(response, now());
             if (!applied.ok) fail("REMOTE_PROTOCOL_ERROR");
             lastAppliedOrder = order;
@@ -222,8 +302,9 @@ export function refreshRemoteRevision(force = true): Promise<KdfRevisionResponse
             lastCode = undefined;
             return response;
         } catch (error) {
-            lastCode = errorCode(error);
-            throw error instanceof RemoteKdfError ? error : new RemoteKdfError("REMOTE_UNAVAILABLE");
+            const normalized = remoteError(error);
+            if (generationActive(generation)) lastCode = normalized.code;
+            throw normalized;
         }
     })();
     inFlightRevision = pending;
@@ -243,15 +324,22 @@ export function refreshRemoteRevisionOnLoad(): void {
     void refreshRemoteRevision(true).catch(() => undefined);
 }
 
+/** Explicit setup refresh: bypass cooldown but join the identical active derive. */
 export function refreshRemoteChannel(channelId: string): Promise<KdfDeriveResponse> {
-    const existing = inFlightDerives.get(channelId);
-    if (existing) return existing;
-    const remote = activeClient();
+    let remote: RemoteKdfClient;
+    try {
+        remote = activeClient();
+    } catch (error) {
+        return rejected(error);
+    }
     const cloudKey = remoteCloudKey();
     if (!cloudKey) return Promise.reject(new RemoteKdfError("REMOTE_KEY_REQUIRED"));
     const request = createDeriveRequest(channelId, cloudKey);
     if (!request.ok) return Promise.reject(new RemoteKdfError("REMOTE_PROTOCOL_ERROR"));
 
+    const key = operationKey(channelId);
+    const existing = inFlightDerives.get(key);
+    if (existing) return existing;
     const generation = configGeneration;
     const epoch = mutationEpoch;
     const startingRevision = getRemoteAuthoritativeRevision();
@@ -260,8 +348,7 @@ export function refreshRemoteChannel(channelId: string): Promise<KdfDeriveRespon
         try {
             const response = await remote.derive(channelId, cloudKey);
             if (
-                closed
-                || generation !== configGeneration
+                !generationActive(generation)
                 || epoch !== mutationEpoch
                 || startingRevision !== getRemoteAuthoritativeRevision()
                 || order <= lastAppliedOrder
@@ -272,32 +359,100 @@ export function refreshRemoteChannel(channelId: string): Promise<KdfDeriveRespon
             lastAppliedOrder = order;
             mutationEpoch += 1;
             markRemoteVerified(response.settingsRevision, generation);
+            cooldowns.delete(key);
             lastCode = undefined;
             return response;
         } catch (error) {
-            // A refresh that cannot strictly install its response is not proof
-            // that the held cloud key still matches the authoritative blob.
-            // Do not let an older stale completion erase proof installed by a
-            // newer mutation; every intervening local/revision mutation already
-            // performs its own appropriate invalidation.
+            const normalized = remoteError(error);
+            // Do not let an older completion erase proof installed by a newer
+            // mutation or recreate cooldown state after mode/config invalidation.
             if (
-                !closed
-                && generation === configGeneration
+                generationActive(generation)
                 && epoch === mutationEpoch
                 && startingRevision === getRemoteAuthoritativeRevision()
                 && order > lastAppliedOrder
             ) {
                 clearRemoteVerification();
+                if (shouldCooldown(normalized.code)) {
+                    cooldowns.set(key, { until: now() + REMOTE_FAILURE_COOLDOWN_MS, code: normalized.code });
+                }
+                lastCode = normalized.code;
             }
-            lastCode = errorCode(error);
-            throw error instanceof RemoteKdfError ? error : new RemoteKdfError("REMOTE_UNAVAILABLE");
+            throw normalized;
         }
     })();
-    inFlightDerives.set(channelId, pending);
+    inFlightDerives.set(key, pending);
     const clearPendingDerive = () => {
-        if (inFlightDerives.get(channelId) === pending) inFlightDerives.delete(channelId);
+        if (inFlightDerives.get(key) === pending) inFlightDerives.delete(key);
     };
     void pending.then(clearPendingDerive, clearPendingDerive);
+    return pending;
+}
+
+/** Cold-path derive with per-generation/revision/channel failure cooldown. */
+export function ensureRemoteChannelKeys(channelId: string): Promise<KdfDeriveResponse> {
+    try {
+        requireStore();
+        const key = operationKey(channelId);
+        const existing = inFlightDerives.get(key);
+        if (existing) return existing;
+        const timestamp = now();
+        pruneCooldowns(timestamp);
+        const cooldown = cooldowns.get(key);
+        if (cooldown && cooldown.until > timestamp) {
+            lastCode = "REMOTE_COOLDOWN";
+            return Promise.reject(new RemoteKdfError("REMOTE_COOLDOWN"));
+        }
+        return refreshRemoteChannel(channelId);
+    } catch (error) {
+        return rejected(error);
+    }
+}
+
+/** Synchronous current-selected key lookup under the conservative revision TTL. */
+export function getFreshRemoteSendKey(channelId: string, slot: number): Uint8Array | null {
+    if (!store || closed || !client || !store.remoteHost || !store.remoteAuthToken) return null;
+    if (!client.capabilities().supported) return null;
+    const revision = getRemoteAuthoritativeRevision();
+    const checkedAt = getRemoteRevisionCheckedAt();
+    const age = checkedAt === undefined ? undefined : now() - checkedAt;
+    if (!revision || age === undefined || age < 0 || age >= REMOTE_REVISION_TTL_MS) return null;
+    return getRemoteSendKey(channelId, slot);
+}
+
+/** Revision-first scalar-only preparation shared by rapid send attempts. */
+export function prepareRemoteSend(channelId: string, slot: number): Promise<void> {
+    if (!Number.isInteger(slot) || slot < 0 || slot >= 8) {
+        return Promise.reject(new RemoteKdfError("REMOTE_SLOT_UNAVAILABLE"));
+    }
+    try {
+        requireStore();
+    } catch (error) {
+        return rejected(error);
+    }
+    const key = sendPreparationKey(channelId, slot);
+    const existing = inFlightSendPreparations.get(key);
+    if (existing) return existing;
+    const generation = configGeneration;
+    const pending = ensureRemoteRevisionFresh()
+        .then(() => {
+            requireGeneration(generation);
+            if (getFreshRemoteSendKey(channelId, slot)) return undefined;
+            return ensureRemoteChannelKeys(channelId).then(() => {
+                requireGeneration(generation);
+                if (!getFreshRemoteSendKey(channelId, slot)) fail("REMOTE_SLOT_UNAVAILABLE");
+            });
+        })
+        .catch((error) => {
+            const normalized = remoteError(error);
+            if (generationActive(generation)) lastCode = normalized.code;
+            throw normalized;
+        });
+    inFlightSendPreparations.set(key, pending);
+    const clearPendingSend = () => {
+        if (inFlightSendPreparations.get(key) === pending) inFlightSendPreparations.delete(key);
+    };
+    void pending.then(clearPendingSend, clearPendingSend);
     return pending;
 }
 
@@ -310,6 +465,7 @@ export function clearRemoteCache(): void {
 }
 
 export function remoteKdfStatus(): RemoteKdfStatus {
+    pruneCooldowns();
     const session = remoteSessionState();
     const revision = store ? getRemoteAuthoritativeRevision() : undefined;
     const checkedAt = store ? getRemoteRevisionCheckedAt() : undefined;
@@ -327,6 +483,8 @@ export function remoteKdfStatus(): RemoteKdfStatus {
         revisionFresh: revisionAge !== undefined && revisionAge >= 0 && revisionAge < REMOTE_REVISION_TTL_MS,
         cachedChannels: counts.channels,
         cachedSets: counts.sets,
+        pendingOperations: inFlightDerives.size + inFlightSendPreparations.size + (inFlightRevision ? 1 : 0),
+        cooldowns: cooldowns.size,
         retention: MAX_REMOTE_REVISIONS_PER_CHANNEL,
         ttlMs: REMOTE_REVISION_TTL_MS,
         ...(lastCode ? { lastCode } : {}),
@@ -342,6 +500,8 @@ export function formatRemoteKdfStatus(): string {
         `ready ${status.ready ? "yes" : "no"}`,
         `revision ${status.revisionKnown ? (status.revisionFresh ? "fresh" : "stale") : "unknown"}`,
         `cache ${status.cachedChannels} channel(s)/${status.cachedSets} set(s)`,
+        `pending ${status.pendingOperations}`,
+        `cooldowns ${status.cooldowns}`,
         `retention ${status.retention}`,
         `ttl ${status.ttlMs}ms`,
         `last ${status.lastCode ?? "ok"}`,
@@ -365,6 +525,9 @@ export function remoteErrorMessage(error: unknown): string {
         REMOTE_PROTOCOL_ERROR: "remote KDF returned an invalid response",
         REMOTE_UNSUPPORTED: "this Kettu build lacks the required bounded network APIs",
         REMOTE_STALE: "remote state changed; refresh again",
+        REMOTE_COOLDOWN: "remote KDF is cooling down; try again shortly",
+        REMOTE_SLOT_UNAVAILABLE: "selected remote password slot is unavailable",
+        REMOTE_SEND_REJECTED: "message not sent; text kept",
     };
     return messages[code];
 }

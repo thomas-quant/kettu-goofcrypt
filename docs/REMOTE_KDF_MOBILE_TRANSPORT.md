@@ -1,9 +1,8 @@
 # Remote KDF mobile transport contract
 
-This document records the Stage 3 Kettu/Hermes transport boundary. Stage 3 can
-configure, verify, cache, inspect, and clear remote KDF state, but it does not
-connect remote keys to the live message send or receive paths. That integration
-belongs to Stage 4.
+This document records the Kettu/Hermes transport boundary and Stage 4 live
+cold-path policy. Remote operation is explicit; manual mode remains the default
+and remote errors never select the manual/local-Argon or plaintext path.
 
 ## Accepted configuration
 
@@ -62,6 +61,32 @@ manual/imported keys. Forgetting remote configuration additionally removes the
 stored origin/token and remote cache and clears the in-memory session key, while
 still preserving all manual settings.
 
+## Stage 4 live cold paths
+
+Incoming content must decode through the exact existing ZWC alphabet into a
+supported complete version/nonce/tag frame before remote work is allowed. A
+synchronous cache hit tries the current set and retained decrypt-only revisions
+newest-to-oldest, preserving the server's slot order. A miss stores at most 200
+exact `{messageId, channelId, ciphertext}` snapshots for the shared
+configuration/revision/channel Promise. Successful derivation retries locally
+and emits only a minimal `MESSAGE_UPDATE` for authenticated plaintext; failures
+leave ciphertext unchanged. Actual request failures create a fixed 30-second
+operation cooldown. Explicit refresh bypasses cooldown.
+
+Outgoing encryption uses only the configured slot in a current send-capable set
+and requires revision freshness inside the five-minute TTL. Cold/stale/missing
+keys start or join scalar-only preparation, but the current `sendMessage` or
+`editMessage` call is rejected through the Vendetta `instead` patch before the
+original function runs. Composer text is unchanged. Preparation owns and catches
+its Promise and can only notify the user to send again; it stores no message,
+arguments, `this`, original callback, or replay closure.
+
+Changing manual/remote mode resets waiters/notifications and invalidates active
+remote operations. It aborts requests and advances commit gates while preserving
+the memory-only cloud key, configured origin/token, manual cache, and persistent
+remote cache. Late results cannot cache, verify, dispatch, or toast. Plugin unload
+closes the cold coordinator before aborting transport.
+
 ## Stage 5 real-device checklist (pending)
 
 Node tests and an eval-safe bundle do not prove React Native networking
@@ -77,6 +102,6 @@ record controlled Android and iOS Kettu/Hermes evidence that:
 - [ ] Missing or incomplete response capabilities fail as
   `REMOTE_UNSUPPORTED`, without a network or body-read fallback.
 
-These checks are intentionally pending. Stage 3 makes no unverified claim about
+These checks are intentionally pending. Stage 4 makes no unverified claim about
 real-device redirect or cancellation behavior and does not authorize weakening
 the boundary if a device fails it.

@@ -16,6 +16,7 @@ import { showToast } from "./discord/metro";
 import { selfTest } from "./selfTest";
 import { SettingsComponent } from "./ui/Settings";
 import { initRemoteKdf, refreshRemoteRevisionOnLoad, shutdownRemoteKdf } from "./cloud/remoteKdf";
+import { initRemoteColdPath, shutdownRemoteColdPath } from "./discord/remoteColdPath";
 
 /**
  * On-load native-crypto probe wiring (enumeration-only, stale-gated). Runs after
@@ -115,6 +116,7 @@ export default {
         // (D-05); never invokes native crypto on load. Isolated in safe() so a
         // probe failure cannot break plugin init.
         safe("native-probe", maybeRunProbe);
+        safe("remote-cold-path", initRemoteColdPath);
         safe("remote-kdf", refreshRemoteRevisionOnLoad);
 
         safe("decrypt-hook", patchFlux);
@@ -127,6 +129,7 @@ export default {
     },
 
     onUnload() {
+        shutdownRemoteColdPath();
         shutdownRemoteKdf();
         unpatchSend();
         unpatchFlux();

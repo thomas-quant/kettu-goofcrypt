@@ -218,6 +218,14 @@ export function getRemoteSendKeys(channelId: string): Uint8Array[] | null {
     return decodeKeys(first.keys);
 }
 
+/** Return one exact selected key from the current send-capable set. */
+export function getRemoteSendKey(channelId: string, slot: number): Uint8Array | null {
+    if (!Number.isInteger(slot) || slot < 0 || slot >= 8) return null;
+    const keys = getRemoteSendKeys(channelId);
+    const key = keys?.[slot];
+    return key?.length === 32 ? Uint8Array.from(key) : null;
+}
+
 export function getRemoteDecryptKeySets(channelId: string): RemoteDecodedKeySet[] {
     if (!CHANNEL_ID.test(channelId)) return [];
     const sets = current().channels[channelId] ?? [];

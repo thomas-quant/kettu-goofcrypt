@@ -1,91 +1,107 @@
 /**
- * Incoming-message decryption by patching FluxDispatcher.dispatch.
- *
- * The dispatch hook is synchronous, so it only decrypts with ALREADY-cached
- * keys (instant). On a cache miss it derives the key asynchronously in the
- * background, then re-dispatches the message with decrypted content — so the UI
- * never freezes on the expensive Argon2 step.
+ * Incoming Discord message handling. Manual mode retains its local cache/warm
+ * path; remote mode uses only strict remote cached keys and shared cold work.
  */
-import { decryptWithCachedKeys } from "../core/decrypt";
+import {
+    decryptWithCachedKeys,
+    decryptWithRemoteKeys,
+    parseCloakedPayload,
+    type DecryptResult,
+    type ParsedCloakedPayload,
+    type RemoteDecryptResult,
+} from "../core/decrypt";
 import { getCachedKey, deriveKey } from "../core/keycache";
-import { getPasswordList, settings } from "../settings";
+import { getRemoteDecryptKeySets } from "../core/remoteKeycache";
+import { getPasswordList, keySource, settings, type KeySource } from "../settings";
 import { noteError } from "../core/health";
 import { isCloaked } from "../stego/zwc";
+import {
+    isRemoteMessageCompleted,
+    queueRemoteDecrypt,
+    rememberRemoteMessageCompleted,
+    type RemoteMessageSnapshot,
+} from "./remoteColdPath";
 import { FluxDispatcher, showToast } from "./metro";
 
-let unpatch: (() => void) | null = null;
-const deriving = new Set<string>(); // messageId guard against duplicate background work
-const decryptedIds = new Set<string>(); // mark-independent re-entrancy guard
+const MAX_COMPLETED_MESSAGE_IDS = 1000;
 
-// Debug-gated (settings().debugInstrument) observation of the
-// LOAD_MESSAGES_SUCCESS concurrency storm: backgroundDecrypt is guarded
-// per-messageId, NOT per-channel, so loading a channel launches N coroutines
-// (Pitfall 3; the per-channel guard FIX is Phase 3). We only MEASURE peak
-// concurrency here — never throw inside the Flux hook (accumulate, mirroring
-// the noteError convention). Zero overhead when debugInstrument is false.
+export interface FluxHandlerDependencies {
+    mode(): KeySource | null;
+    mark(): string;
+    isCloaked(content: string): boolean;
+    manualDecrypt(content: string, channelId: string): DecryptResult | null;
+    startManual(message: any, channelId: string): void;
+    parseRemote(content: string): ParsedCloakedPayload | null;
+    remoteDecrypt(parsed: ParsedCloakedPayload, channelId: string): RemoteDecryptResult | null;
+    queueRemote(snapshot: RemoteMessageSnapshot): void;
+    hasCompleted(messageId: string): boolean;
+    rememberCompleted(messageId: string): void;
+}
+
+let unpatch: (() => void) | null = null;
+let productionHandler: ((payload: any) => void) | null = null;
+let fluxGeneration = 0;
+const deriving = new Set<string>();
+const decryptedIds = new Set<string>();
 let activeDerivations = 0;
 let peakDerivations = 0;
 
-function isMarked(content: string): boolean {
-    const mark = settings().mark;
-    return !!mark && content.startsWith(mark);
+function rememberManualCompleted(messageId: string): void {
+    if (!messageId) return;
+    decryptedIds.delete(messageId);
+    decryptedIds.add(messageId);
+    if (decryptedIds.size <= MAX_COMPLETED_MESSAGE_IDS) return;
+    const ids = Array.from(decryptedIds);
+    decryptedIds.delete(ids[0]);
 }
 
-function decryptInPlace(message: any, channelId: string | undefined): void {
-    if (!message?.content || !channelId) return;
-    const id = String(message.id ?? "");
-    if (id && decryptedIds.has(id)) return; // already handled (robust even if mark is empty)
-    if (isMarked(message.content) || !isCloaked(message.content)) return;
-    const res = decryptWithCachedKeys(message.content, channelId, getPasswordList());
-    if (res) {
-        message.content = settings().mark + res.text;
-        if (id) decryptedIds.add(id);
-    } else {
-        backgroundDecrypt(message, channelId);
-    }
+function rememberCompleted(messageId: string): void {
+    rememberManualCompleted(messageId);
+    rememberRemoteMessageCompleted(messageId);
 }
 
-/** Derive any missing keys async, then re-dispatch the decrypted message. */
-function backgroundDecrypt(message: any, channelId: string): void {
+/** Derive missing manual keys, then re-dispatch the original manual message. */
+function backgroundManualDecrypt(message: any, channelId: string): void {
     const id = String(message?.id ?? "");
     const passwords = getPasswordList();
     if (!id || passwords.length === 0 || deriving.has(id)) return;
-    // Only bother if at least one password's key isn't cached yet.
-    if (passwords.every((p) => getCachedKey(channelId, p))) return;
+    if (passwords.every((password) => getCachedKey(channelId, password))) return;
     deriving.add(id);
+    const generation = fluxGeneration;
     const debug = settings().debugInstrument;
     if (debug) {
         activeDerivations++;
         if (activeDerivations > peakDerivations) peakDerivations = activeDerivations;
         try {
             vendetta.logger.log(`GoofCrypt[diag] backgroundDecrypt launch: active=${activeDerivations} peak=${peakDerivations}`);
-        } catch {
-            /* logging must never break the hook */
-        }
+        } catch {}
     }
     showToast("GoofCrypt: deriving key to decrypt (one-time for this chat)…");
 
     (async () => {
-        for (const pw of passwords) {
-            if (getCachedKey(channelId, pw)) continue;
+        for (let i = 0; i < passwords.length; i++) {
+            const password = passwords[i];
+            if (getCachedKey(channelId, password)) continue;
             try {
-                await deriveKey(channelId, pw);
-            } catch (e) {
-                noteError("deriveFails", e);
+                await deriveKey(channelId, password);
+            } catch (error) {
+                noteError("deriveFails", error);
             }
         }
-        const res = decryptWithCachedKeys(message.content, channelId, passwords);
-        if (res) {
-            if (id) decryptedIds.add(id);
+        if (generation !== fluxGeneration) return;
+        const result = decryptWithCachedKeys(message.content, channelId, passwords);
+        if (!result || generation !== fluxGeneration) return;
+        rememberCompleted(id);
+        try {
+            FluxDispatcher().dispatch({
+                type: "MESSAGE_UPDATE",
+                channelId,
+                message: { ...message, content: settings().mark + result.text },
+            });
+        } catch {
             try {
-                FluxDispatcher().dispatch({
-                    type: "MESSAGE_UPDATE",
-                    channelId, // include so the handler can resolve the channel
-                    message: { ...message, content: settings().mark + res.text },
-                });
-            } catch (e) {
-                vendetta.logger.error("GoofCrypt re-dispatch failed", e);
-            }
+                vendetta.logger.error("GoofCrypt manual re-dispatch failed");
+            } catch {}
         }
     })().finally(() => {
         deriving.delete(id);
@@ -93,45 +109,108 @@ function backgroundDecrypt(message: any, channelId: string): void {
     });
 }
 
-function handle(payload: any): void {
-    switch (payload?.type) {
-        case "MESSAGE_CREATE":
-        case "MESSAGE_UPDATE":
-            decryptInPlace(payload.message, payload.channelId ?? payload.message?.channel_id);
-            break;
-        case "LOAD_MESSAGES_SUCCESS":
-            if (Array.isArray(payload.messages)) {
-                for (const m of payload.messages) decryptInPlace(m, m?.channel_id ?? payload.channelId);
+export function createFluxHandler(dependencies: FluxHandlerDependencies): (payload: any) => void {
+    function handleMessage(message: any, channelId: string | undefined): void {
+        if (!message?.content || !channelId) return;
+        const id = String(message.id ?? "");
+        if (id && dependencies.hasCompleted(id)) return;
+        const mark = dependencies.mark();
+        if (mark && message.content.startsWith(mark)) return;
+
+        const mode = dependencies.mode();
+        if (mode === "manual") {
+            if (!dependencies.isCloaked(message.content)) return;
+            const result = dependencies.manualDecrypt(message.content, channelId);
+            if (result) {
+                message.content = mark + result.text;
+                if (id) dependencies.rememberCompleted(id);
+            } else {
+                dependencies.startManual(message, channelId);
             }
-            break;
-        case "MESSAGE_START_EDIT": {
-            const mark = settings().mark;
-            if (mark && typeof payload.content === "string" && payload.content.startsWith(mark)) {
-                payload.content = payload.content.slice(mark.length);
-            }
-            break;
+            return;
         }
+        if (mode !== "remote") return;
+
+        const parsed = dependencies.parseRemote(message.content);
+        if (!parsed) return;
+        const result = dependencies.remoteDecrypt(parsed, channelId);
+        if (result) {
+            message.content = mark + result.text;
+            if (id) dependencies.rememberCompleted(id);
+            return;
+        }
+        if (!id) return;
+        dependencies.queueRemote({
+            messageId: id,
+            channelId,
+            ciphertext: message.content,
+        });
     }
+
+    return (payload: any): void => {
+        switch (payload?.type) {
+            case "MESSAGE_CREATE":
+            case "MESSAGE_UPDATE":
+                handleMessage(payload.message, payload.channelId ?? payload.message?.channel_id);
+                break;
+            case "LOAD_MESSAGES_SUCCESS":
+                if (Array.isArray(payload.messages)) {
+                    for (let i = 0; i < payload.messages.length; i++) {
+                        const message = payload.messages[i];
+                        handleMessage(message, payload.channelId ?? message?.channel_id);
+                    }
+                }
+                break;
+            case "MESSAGE_START_EDIT": {
+                const mark = dependencies.mark();
+                if (mark && typeof payload.content === "string" && payload.content.startsWith(mark)) {
+                    payload.content = payload.content.slice(mark.length);
+                }
+                break;
+            }
+        }
+    };
+}
+
+function createProductionHandler(): (payload: any) => void {
+    return createFluxHandler({
+        mode: keySource,
+        mark: () => settings().mark,
+        isCloaked,
+        manualDecrypt: (content, channelId) => decryptWithCachedKeys(content, channelId, getPasswordList()),
+        startManual: backgroundManualDecrypt,
+        parseRemote: parseCloakedPayload,
+        remoteDecrypt: (parsed, channelId) => decryptWithRemoteKeys(parsed, getRemoteDecryptKeySets(channelId)),
+        queueRemote: queueRemoteDecrypt,
+        hasCompleted: (id) => decryptedIds.has(id) || isRemoteMessageCompleted(id),
+        rememberCompleted,
+    });
 }
 
 export function patchFlux(): void {
     if (unpatch) return;
+    productionHandler = createProductionHandler();
     unpatch = vendetta.patcher.before("dispatch", FluxDispatcher(), (args: any[]) => {
         try {
-            handle(args[0]);
-        } catch (e) {
-            vendetta.logger.error("GoofCrypt flux decrypt error", e);
+            productionHandler?.(args[0]);
+        } catch {
+            try {
+                vendetta.logger.error("GoofCrypt flux decrypt error");
+            } catch {}
         }
     });
 }
 
 export function unpatchFlux(): void {
-    if (unpatch) {
-        try {
-            unpatch();
-        } catch {
-            /* ignore */
-        }
-        unpatch = null;
-    }
+    fluxGeneration += 1;
+    deriving.clear();
+    decryptedIds.clear();
+    activeDerivations = 0;
+    peakDerivations = 0;
+    productionHandler = null;
+    if (!unpatch) return;
+    try {
+        unpatch();
+    } catch {}
+    unpatch = null;
 }

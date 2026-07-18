@@ -5,6 +5,8 @@
 import type { KeyCacheStore } from "./core/keycache";
 import type { RemoteKeyCacheStore } from "./core/remoteKeycache";
 
+export type KeySource = "manual" | "remote";
+
 /**
  * Result of testing one native-crypto candidate (a reachable native module that
  * might reproduce the exact Argon2id derivation). Plain-JSON only — no
@@ -86,6 +88,10 @@ export interface Settings extends KeyCacheStore, RemoteKeyCacheStore {
     remoteAuthToken: string;
     /** Development-only direct loopback HTTP opt-in. */
     remoteAllowInsecureLocalhost: boolean;
+    /** Explicit message-key source. Never inferred from cache or cloud setup. */
+    keySource: KeySource;
+    /** Ordered remote password slot used only for outgoing remote messages. */
+    remoteSendSlot: number;
 }
 
 export const DEFAULTS: Settings = {
@@ -102,6 +108,8 @@ export const DEFAULTS: Settings = {
     remoteHost: "",
     remoteAuthToken: "",
     remoteAllowInsecureLocalhost: false,
+    keySource: "manual",
+    remoteSendSlot: 0,
 };
 
 let store: Settings | null = null;
@@ -117,7 +125,7 @@ export function initSettings(s: Settings): void {
         // no such proxy so this never shows up in the harness). A null/undefined
         // default just stays absent — every read site already treats absent as
         // "not set yet" (`if (x)`, `x ?? null`). SPIKE-03 on-device finding.
-        if (store[k] === undefined && d != null) (store as any)[k] = d;
+        if (!Object.prototype.hasOwnProperty.call(store, k) && d != null) (store as any)[k] = d;
     }
 }
 
@@ -128,6 +136,34 @@ export function settings(): Settings {
 
 export function isReady(): boolean {
     return store !== null;
+}
+
+/** Strict persisted mode read. Corrupt present values remain fail-closed. */
+export function keySource(): KeySource | null {
+    const value: unknown = settings().keySource;
+    return value === "manual" || value === "remote" ? value : null;
+}
+
+/** Persist an exact supported key source without coercion or fallback. */
+export function setKeySource(value: unknown): value is KeySource {
+    if (value !== "manual" && value !== "remote") return false;
+    settings().keySource = value;
+    return true;
+}
+
+/** Strict outgoing remote slot read. Incoming decryption does not use it. */
+export function remoteSendSlot(): number | null {
+    const value: unknown = settings().remoteSendSlot;
+    return Number.isInteger(value) && (value as number) >= 0 && (value as number) < 8
+        ? value as number
+        : null;
+}
+
+/** Persist an exact integer remote slot in the frozen server range 0..7. */
+export function setRemoteSendSlot(value: unknown): boolean {
+    if (!Number.isInteger(value) || (value as number) < 0 || (value as number) >= 8) return false;
+    settings().remoteSendSlot = value as number;
+    return true;
 }
 
 /** Pure: parse a comma-separated string into trimmed, de-duplicated entries. */
