@@ -2,7 +2,10 @@
  * Shared remote-KDF cold-path coordination. Incoming state is bounded to exact
  * three-string snapshots; outgoing preparation never accepts or retains text.
  */
+import { sha256 } from "@noble/hashes/sha2";
 import { RemoteKdfError } from "../cloud/client";
+import { utf8Encode } from "../crypto/deflate";
+import { toBase64 } from "../util/base64";
 import {
     ensureRemoteChannelKeys,
     invalidateRemoteOperations,
@@ -58,8 +61,9 @@ export interface RemoteColdPathDependencies {
 export interface RemoteColdPath {
     queueIncoming(snapshot: RemoteMessageSnapshot): "started" | "joined" | "overflow" | "ignored";
     queueSend(channelId: string, slot: number): "started" | "joined" | "ignored";
-    hasCompleted(messageId: string): boolean;
-    rememberCompleted(messageId: string): void;
+    observeMessage(messageId: string, content: string | undefined): void;
+    hasCompleted(messageId: string, content: string): boolean;
+    rememberCompleted(messageId: string, content: string): void;
     reset(): void;
     shutdown(): void;
     status(): RemoteColdPathStatus;
@@ -92,7 +96,7 @@ function validSnapshot(snapshot: RemoteMessageSnapshot): boolean {
 export function createRemoteColdPath(dependencies: RemoteColdPathDependencies): RemoteColdPath {
     const incoming = new Map<Promise<unknown>, IncomingOperation>();
     const sends = new Map<string, SendOperation>();
-    const completed = new Set<string>();
+    const completed = new Map<string, string>();
     let generation = 0;
     let closed = false;
 
@@ -100,51 +104,74 @@ export function createRemoteColdPath(dependencies: RemoteColdPathDependencies): 
         return !closed && operationGeneration === generation && dependencies.mode() === "remote";
     }
 
-    function rememberCompleted(messageId: string): void {
+    function contentId(content: string): string {
+        return toBase64(sha256(utf8Encode(content)));
+    }
+
+    function rememberCompleted(messageId: string, content: string): void {
         if (!messageId) return;
         completed.delete(messageId);
-        completed.add(messageId);
+        completed.set(messageId, contentId(content));
         if (completed.size <= MAX_REMOTE_COMPLETED_MESSAGES) return;
-        const ids = Array.from(completed);
+        const ids = Array.from(completed.keys());
         completed.delete(ids[0]);
+    }
+
+    function observeMessage(messageId: string, content: string | undefined): void {
+        const operations = Array.from(incoming.values());
+        for (let i = 0; i < operations.length; i++) {
+            const snapshot = operations[i].waiting.get(messageId);
+            if (snapshot && snapshot.ciphertext !== content) operations[i].waiting.delete(messageId);
+        }
+        if (content === undefined) completed.delete(messageId);
     }
 
     function settleIncoming(promise: Promise<unknown>, success: boolean): void {
         const operation = incoming.get(promise);
         if (!operation) return;
-        incoming.delete(promise);
-        const canDispatch = success && active(operation.generation);
-        const snapshots = canDispatch ? Array.from(operation.waiting.values()) : [];
-        operation.waiting.clear();
-        if (!canDispatch) return;
-        for (let i = 0; i < snapshots.length; i++) {
-            const snapshot = snapshots[i];
-            let plaintext: string | null = null;
-            try {
-                plaintext = dependencies.decrypt(snapshot);
-            } catch {
-                plaintext = null;
+        try {
+            if (!success || !active(operation.generation)) return;
+            const snapshots = Array.from(operation.waiting.values());
+            for (let i = 0; i < snapshots.length; i++) {
+                const snapshot = snapshots[i];
+                if (operation.waiting.get(snapshot.messageId) !== snapshot) continue;
+                let plaintext: string | null = null;
+                try {
+                    plaintext = dependencies.decrypt(snapshot);
+                } catch {
+                    plaintext = null;
+                }
+                if (
+                    plaintext === null
+                    || !active(operation.generation)
+                    || operation.waiting.get(snapshot.messageId) !== snapshot
+                ) continue;
+                const content = dependencies.mark() + plaintext;
+                operation.waiting.delete(snapshot.messageId);
+                rememberCompleted(snapshot.messageId, content);
+                try {
+                    dependencies.dispatch({
+                        type: "MESSAGE_UPDATE",
+                        channelId: snapshot.channelId,
+                        message: {
+                            id: snapshot.messageId,
+                            channel_id: snapshot.channelId,
+                            content,
+                        },
+                    });
+                } catch {
+                    /* Dispatch failure must not expose caught host values. */
+                }
             }
-            if (plaintext === null || !active(operation.generation)) continue;
-            rememberCompleted(snapshot.messageId);
-            try {
-                dependencies.dispatch({
-                    type: "MESSAGE_UPDATE",
-                    channelId: snapshot.channelId,
-                    message: {
-                        id: snapshot.messageId,
-                        channel_id: snapshot.channelId,
-                        content: dependencies.mark() + plaintext,
-                    },
-                });
-            } catch {
-                /* Dispatch failure must not expose caught host values. */
-            }
+        } finally {
+            operation.waiting.clear();
+            if (incoming.get(promise) === operation) incoming.delete(promise);
         }
     }
 
     function queueIncoming(snapshot: RemoteMessageSnapshot): "started" | "joined" | "overflow" | "ignored" {
         if (closed || dependencies.mode() !== "remote" || !validSnapshot(snapshot)) return "ignored";
+        observeMessage(snapshot.messageId, snapshot.ciphertext);
         let promise: Promise<unknown>;
         try {
             promise = dependencies.ensureKeys(snapshot.channelId);
@@ -246,7 +273,11 @@ export function createRemoteColdPath(dependencies: RemoteColdPathDependencies): 
     return {
         queueIncoming,
         queueSend,
-        hasCompleted: (messageId) => completed.has(messageId),
+        observeMessage,
+        hasCompleted: (messageId, content) => {
+            const fingerprint = completed.get(messageId);
+            return fingerprint !== undefined && fingerprint === contentId(content);
+        },
         rememberCompleted,
         reset,
         shutdown,
@@ -281,12 +312,16 @@ export function queueRemoteSendPreparation(channelId: string, slot: number): "st
     return production?.queueSend(channelId, slot) ?? "ignored";
 }
 
-export function isRemoteMessageCompleted(messageId: string): boolean {
-    return production?.hasCompleted(messageId) ?? false;
+export function observeRemoteMessage(messageId: string, content: string | undefined): void {
+    production?.observeMessage(messageId, content);
 }
 
-export function rememberRemoteMessageCompleted(messageId: string): void {
-    production?.rememberCompleted(messageId);
+export function isRemoteMessageCompleted(messageId: string, content: string): boolean {
+    return production?.hasCompleted(messageId, content) ?? false;
+}
+
+export function rememberRemoteMessageCompleted(messageId: string, content: string): void {
+    production?.rememberCompleted(messageId, content);
 }
 
 export function resetRemoteColdPath(): void {

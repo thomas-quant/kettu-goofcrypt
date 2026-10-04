@@ -2,32 +2,50 @@ name: CI
 
 on:
   push:
-    branches: [main]
+  pull_request:
   workflow_dispatch:
 
-# Allow GITHUB_TOKEN to deploy to GitHub Pages.
 permissions:
   contents: read
 
 concurrency:
-  group: pages
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   test:
-    name: Byte-compat harness vs stegcloak-rs
+    name: Typecheck and byte-compat harness vs stegcloak-rs
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: npm install
+      - run: npm ci
+      - run: npm exec tsc -- --noEmit --incremental false
       - run: npm test
 
-  build-deploy:
-    name: Build + deploy plugin to Pages
+  build:
+    name: Build plugin artifact
     needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: goofcrypt-site
+          path: site
+          if-no-files-found: error
+
+  deploy:
+    name: Deploy plugin to Pages
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -37,12 +55,10 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/download-artifact@v4
         with:
-          node-version: 24
-      - run: npm install
-      - run: npm run build
+          name: goofcrypt-site
+          path: site
       - uses: actions/configure-pages@v5
         with:
           enablement: true

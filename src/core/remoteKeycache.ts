@@ -117,9 +117,14 @@ function sanitizeEnvelope(value: unknown): RemoteKeyCacheV1 {
 
 function current(): RemoteKeyCacheV1 {
     if (!store) throw new Error("remote key cache not initialised");
-    const sanitized = sanitizeEnvelope(store.remoteKeyCache);
-    store.remoteKeyCache = sanitized;
-    return sanitized;
+    const value = store.remoteKeyCache;
+    if (
+        !isRecord(value)
+        || !hasOnlyKeys(value, ["version", "currentRevision", "revisionCheckedAt", "channels"])
+        || value.version !== REMOTE_KEY_CACHE_VERSION
+        || !isRecord(value.channels)
+    ) return emptyCache();
+    return value as unknown as RemoteKeyCacheV1;
 }
 
 function cloneChannels(channels: Record<string, RemoteChannelKeySet[]>): Record<string, RemoteChannelKeySet[]> {
@@ -149,17 +154,19 @@ export function initRemoteKeyCache(persisted: RemoteKeyCacheStore): void {
 }
 
 export function getRemoteAuthoritativeRevision(): string | undefined {
-    return current().currentRevision;
+    const revision = current().currentRevision;
+    return validRevision(revision) ? revision : undefined;
 }
 
 export function getRemoteRevisionCheckedAt(): number | undefined {
-    return current().revisionCheckedAt;
+    const timestamp = current().revisionCheckedAt;
+    return Number.isSafeInteger(timestamp) && timestamp! >= 0 ? timestamp : undefined;
 }
 
 export function storeRemoteDerivedKeys(channelId: string, value: KdfDeriveResponse, checkedAt: number): boolean {
     const parsed = parseDeriveResponse(value);
     if (!CHANNEL_ID.test(channelId) || !parsed.ok || !Number.isSafeInteger(checkedAt) || checkedAt < 0 || !store) return false;
-    const before = current();
+    const before = sanitizeEnvelope(current());
     const channels = cloneChannels(before.channels);
     if (before.currentRevision !== parsed.value.settingsRevision) demoteAll(channels);
 
@@ -188,7 +195,7 @@ export function storeRemoteDerivedKeys(channelId: string, value: KdfDeriveRespon
 export function applyRemoteRevision(value: KdfRevisionResponse, checkedAt: number): { ok: boolean; changed: boolean } {
     const parsed = parseRevisionResponse(value);
     if (!parsed.ok || !Number.isSafeInteger(checkedAt) || checkedAt < 0 || !store) return { ok: false, changed: false };
-    const before = current();
+    const before = sanitizeEnvelope(current());
     const changed = before.currentRevision !== undefined && before.currentRevision !== parsed.value.settingsRevision;
     const channels = cloneChannels(before.channels);
     if (changed) demoteAll(channels);
@@ -213,7 +220,8 @@ function decodeKeys(keys: string[]): Uint8Array[] | null {
 export function getRemoteSendKeys(channelId: string): Uint8Array[] | null {
     if (!CHANNEL_ID.test(channelId)) return null;
     const cache = current();
-    const first = cache.channels[channelId]?.[0];
+    const sets = cache.channels[channelId];
+    const first = Array.isArray(sets) ? sanitizeSet(sets[0]) : null;
     if (!first?.sendCapable || first.settingsRevision !== cache.currentRevision) return null;
     return decodeKeys(first.keys);
 }
@@ -228,11 +236,16 @@ export function getRemoteSendKey(channelId: string, slot: number): Uint8Array | 
 
 export function getRemoteDecryptKeySets(channelId: string): RemoteDecodedKeySet[] {
     if (!CHANNEL_ID.test(channelId)) return [];
-    const sets = current().channels[channelId] ?? [];
+    const sets = current().channels[channelId];
+    if (!Array.isArray(sets)) return [];
     const out: RemoteDecodedKeySet[] = [];
-    for (let i = 0; i < sets.length; i++) {
-        const keys = decodeKeys(sets[i].keys);
-        if (keys) out.push({ settingsRevision: sets[i].settingsRevision, keys });
+    const seen = new Set<string>();
+    for (let i = 0; i < sets.length && i < MAX_REMOTE_REVISIONS_PER_CHANNEL; i++) {
+        const set = sanitizeSet(sets[i]);
+        if (!set || seen.has(set.settingsRevision)) continue;
+        seen.add(set.settingsRevision);
+        const keys = decodeKeys(set.keys);
+        if (keys) out.push({ settingsRevision: set.settingsRevision, keys });
     }
     return out;
 }
@@ -243,7 +256,7 @@ export function clearRemoteKeyCache(): void {
 }
 
 export function remoteKeyCacheCounts(): { channels: number; sets: number } {
-    const channels = current().channels;
+    const channels = sanitizeEnvelope(current()).channels;
     const ids = Object.keys(channels);
     let sets = 0;
     for (let i = 0; i < ids.length; i++) sets += channels[ids[i]].length;

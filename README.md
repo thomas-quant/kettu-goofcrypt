@@ -30,6 +30,10 @@ It's a Vendetta-format plugin.
 - **Sending**: turn encryption on with the `/encrypt` command (or the settings
   toggle), then send normally. Your message is hidden inside the cover text.
   - `/encrypt on` · `off` · `toggle` · `mode-manual` · `mode-remote` · `status`
+  - Ordinary joined emoji and zero-width text are encrypted too. Only complete
+    supported encrypted frames pass through unchanged.
+  - With encryption enabled, a missing manual password rejects the send and
+    keeps your text; it never sends that text unencrypted.
 
 Passwords, cover, and the displayed mark are configured in the plugin's settings
 page. The salt is the Discord channel ID (same as GoofCord), so a key is derived
@@ -68,7 +72,10 @@ complete supported frame. Only then may a cache miss start remote work. Current
 and at most two retained old revisions are tried locally, newest first and in
 stable server slot order; old revisions are decrypt-only. Multiple cold messages
 for one channel/revision share one request and a bounded waiting set. Successful
-messages are retried locally and updated; failures remain ciphertext. Actual
+messages are retried locally and updated; failures remain ciphertext. Later
+edits, empty-content updates, and deletions invalidate obsolete waiting messages.
+Encrypted edits and fresh history copies are decrypted again; only exact
+plugin-produced display content is suppressed on redispatch. Actual
 derive failures enter a 30-second client cooldown so history loads cannot hammer
 the worker.
 
@@ -102,8 +109,10 @@ Remote status, channel refresh, revision check, and remote-cache clear are also
 available as `/encrypt` actions. Secret token/key values are deliberately
 settings-only because slash-command arguments and bot replies are copyable. The
 remote cache keeps the current revision and at most two older decrypt-only
-revisions per channel. Clearing it preserves remote credentials and every manual
-password/imported key; forgetting remote configuration removes the origin,
+revisions per channel. Cache reads validate the requested channel without
+rewriting persistent storage. An unchanged revision check refreshes the TTL
+without invalidating an in-flight derivation. Clearing it preserves remote
+credentials and every manual password/imported key; forgetting remote configuration removes the origin,
 token, session key, and remote cache while still preserving manual settings.
 
 Missing configuration/session key, invalid or expired token, missing/passwordless
@@ -151,7 +160,9 @@ the real `stegcloak-rs` WASM library on every push.
 
 ## Develop
 
-All builds and tests run in **GitHub Actions** (`.github/workflows/ci.yml`):
+GitHub Actions (`.github/workflows/ci.yml`) type-checks, tests, and builds every
+branch and pull request. Successful builds publish a `goofcrypt-site` artifact;
+only `main` deploys it to GitHub Pages. No GSD workflow is required.
 
 - `npm test` — esbuild-bundles `tests/harness.ts` (with the `stegcloak-rs` wasm) and
   runs the byte-compat cross-check.

@@ -55,6 +55,12 @@ set plus two older decrypt-only sets. A changed authoritative revision globally
 demotes cached send capability. Revision checks are forced once on configured
 plugin load and on explicit user checks; the Stage 4 pre-send API may reuse a
 successful check for five minutes. Failed checks never advance freshness.
+An unchanged revision check refreshes freshness without invalidating a valid
+in-flight derive. Actual revision transitions and local configuration/cache
+mutations still advance the stale-response fence. Same-revision channel derives
+remain independent, and an older failure cannot erase newer verification.
+Cache initialization and mutations sanitize persistent state; hot reads validate
+only the requested channel and never assign the cache back to storage.
 
 Clearing the remote cache keeps the remote credentials, manual passwords, and
 manual/imported keys. Forgetting remote configuration additionally removes the
@@ -70,8 +76,14 @@ newest-to-oldest, preserving the server's slot order. A miss stores at most 200
 exact `{messageId, channelId, ciphertext}` snapshots for the shared
 configuration/revision/channel Promise. Successful derivation retries locally
 and emits only a minimal `MESSAGE_UPDATE` for authenticated plaintext; failures
-leave ciphertext unchanged. Actual request failures create a fixed 30-second
-operation cooldown. Explicit refresh bypasses cooldown.
+leave ciphertext unchanged. Content-bearing edits, empty-content updates, and
+deletions invalidate obsolete waiters, including during synchronous redispatch.
+Metadata-only updates preserve them. Completed-message suppression matches the
+exact emitted display content using bounded memory-only SHA-256 fingerprints,
+not message IDs or the display mark alone; encrypted edits and fresh history
+copies are decrypted again. No plaintext display content is retained by this
+fingerprint cache. Actual request failures create a fixed 30-second operation
+cooldown. Explicit refresh bypasses cooldown.
 
 Outgoing encryption uses only the configured slot in a current send-capable set
 and requires revision freshness inside the five-minute TTL. Cold/stale/missing

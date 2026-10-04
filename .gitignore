@@ -1,4 +1,5 @@
 node_modules/
 site/
 tests/dist/
+.artifacts/
 *.log

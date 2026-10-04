@@ -8,7 +8,7 @@ import { encryptWithKey, MessageTooLongError } from "../core/encrypt";
 import { getCachedKey, deriveKey } from "../core/keycache";
 import { noteError } from "../core/health";
 import { getRandomBytes } from "../crypto/random";
-import { isCloaked } from "../stego/zwc";
+import { parseCloakedPayload } from "../core/decrypt";
 import {
     chosenPassword,
     keySource,
@@ -24,7 +24,7 @@ export interface SendPatchDependencies {
     mode(): KeySource | null;
     remoteSlot(): number | null;
     cover(): string;
-    isCloaked(content: string): boolean;
+    isEncrypted(content: string): boolean;
     manualPassword(): string | undefined;
     manualKey(channelId: string, password: string): Uint8Array | null;
     warmManual(channelId: string, password: string): void;
@@ -70,13 +70,16 @@ function createSendInterceptor(
 
         const channelId = typeof args[0] === "string" ? args[0] : "";
         const message = args[messageArgIndex];
-        if (!message?.content || dependencies.isCloaked(message.content)) return orig.apply(this, args);
+        if (!message?.content || dependencies.isEncrypted(message.content)) return orig.apply(this, args);
 
         if (mode === "manual") {
             const password = dependencies.manualPassword();
             if (!password) {
-                dependencies.toast("GoofCrypt: no password set — sent unencrypted");
-                return orig.apply(this, args);
+                return rejectSend(
+                    dependencies,
+                    "GoofCrypt: no password set — not sent (text kept)",
+                    new Error("manual password required"),
+                );
             }
             const key = dependencies.manualKey(channelId, password);
             if (!key) {
@@ -179,7 +182,7 @@ function productionDependencies(): SendPatchDependencies {
         mode: keySource,
         remoteSlot: remoteSendSlot,
         cover: () => settings().cover,
-        isCloaked,
+        isEncrypted: (content) => parseCloakedPayload(content) !== null,
         manualPassword: chosenPassword,
         manualKey: getCachedKey,
         warmManual,

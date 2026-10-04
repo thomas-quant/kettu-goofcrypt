@@ -20,7 +20,8 @@ import {
     initRemoteKeyCache,
     storeRemoteDerivedKeys,
 } from "../src/core/remoteKeycache";
-import { conceal, ZWC } from "../src/stego/zwc";
+import { conceal, isCloaked, ZWC } from "../src/stego/zwc";
+import { detectRng } from "../src/crypto/random";
 import {
     DEFAULTS,
     initSettings,
@@ -62,6 +63,8 @@ import {
 import { createFluxHandler } from "../src/discord/flux";
 import {
     registerSendPatches,
+    patchSend,
+    unpatchSend,
     type SendPatchDependencies,
 } from "../src/discord/send";
 
@@ -760,7 +763,7 @@ export async function runRemoteKdfStage4Checks(check: Stage4Check): Promise<void
     let remoteDecryptCalls = 0;
     let remotePlaintext: string | null = null;
     const queuedSnapshots: RemoteMessageSnapshot[] = [];
-    const completedIds = new Set<string>();
+    const completedIds = new Map<string, string>();
     const parsedFixture = minimumParsed as ParsedCloakedPayload;
     const fluxHandler = createFluxHandler({
         mode: () => fluxMode,
@@ -784,8 +787,9 @@ export async function runRemoteKdfStage4Checks(check: Stage4Check): Promise<void
         queueRemote: (snapshot) => {
             queuedSnapshots.push(snapshot);
         },
-        hasCompleted: (id) => completedIds.has(id),
-        rememberCompleted: (id) => completedIds.add(id),
+        observeMessage: () => undefined,
+        hasCompleted: (id, content) => completedIds.get(id) === content,
+        rememberCompleted: (id, content) => { completedIds.set(id, content); },
     });
 
     const invalidIncoming = { id: "f0", channel_id: "500", content: "ciphertext" };
@@ -816,7 +820,6 @@ export async function runRemoteKdfStage4Checks(check: Stage4Check): Promise<void
         hotIncoming.content === "MARK hot-plain" && completedIds.has("f2") && queuedSnapshots.length === 0,
     );
     fluxHandler({ type: "MESSAGE_UPDATE", channelId: "502", message: hotIncoming });
-    check("completed message ID suppresses re-entry", remoteDecryptCalls === 1);
 
     remotePlaintext = null;
     fluxHandler({
@@ -898,7 +901,7 @@ export async function runRemoteKdfStage4Checks(check: Stage4Check): Promise<void
         mode: () => sendMode,
         remoteSlot: () => sendSlot,
         cover: () => "cover",
-        isCloaked: () => false,
+        isEncrypted: (content) => parseCloakedPayload(content) !== null,
         manualPassword: () => {
             manualGetterCalls++;
             return MANUAL_PASSWORD;
@@ -1129,6 +1132,212 @@ export async function runRemoteKdfStage4Checks(check: Stage4Check): Promise<void
             && sendToasts.length === toastsBeforeRng + 1
             && sendToasts[toastsBeforeRng].indexOf("rng unavailable test detail") < 0,
     );
+
+    const previousVendetta = (globalThis as any).vendetta;
+    const productionPatches: Record<string, CapturedPatch> = {};
+    const productionStore = freshStore();
+    productionStore.enabled = true;
+    productionStore.passwords = MANUAL_PASSWORD;
+    productionStore.remoteHost = "https://cloud.example.test";
+    productionStore.remoteAuthToken = TOKEN;
+    productionStore.keys = { [CHANNEL]: { [passwordId(MANUAL_PASSWORD)]: toBase64(KEY_A) } };
+    initSettings(productionStore);
+    initKeyCache(productionStore);
+    clearMemory();
+    initRemoteKdf(productionStore, {
+        clientFactory: () => ({
+            derive: async () => { throw new Error("unexpected derive"); },
+            revision: async () => ({ version: 1, settingsRevision: REVISION_A }),
+            abortAll() {},
+            capabilities: () => ({ supported: true, boundingMode: "stream" }),
+        }),
+        now: () => 1000,
+    });
+    storeRemoteDerivedKeys(CHANNEL, deriveResponse(REVISION_A), 1000);
+    detectRng();
+    (globalThis as any).vendetta = {
+        metro: { findByProps: () => fakeActions },
+        patcher: {
+            instead(name: string, _parent: unknown, callback: CapturedPatch) {
+                productionPatches[name] = callback;
+                return () => undefined;
+            },
+        },
+        ui: { toasts: { showToast() {} } },
+        logger: { log() {} },
+    };
+    let unicodeEncrypted = true;
+    let missingPasswordRejected = true;
+    try {
+        patchSend();
+        const fragments = ["👩‍💻", ...ZWC];
+        for (const source of ["manual", "remote"] as const) {
+            productionStore.keySource = source;
+            for (const action of ["sendMessage", "editMessage"]) {
+                for (const fragment of fragments) {
+                    const plaintext = `private plan ${fragment}`;
+                    const message = { content: plaintext };
+                    const args = action === "sendMessage" ? [CHANNEL, message] : [CHANNEL, "unicode-id", message];
+                    const sent = productionPatches[action].call({}, args, (...values: any[]) => values[values.length - 1].content);
+                    const parsed = parseCloakedPayload(sent as string);
+                    if (!parsed || decryptWithRemoteKeys(parsed, [{ settingsRevision: REVISION_A, keys: [KEY_A] }])?.text !== plaintext) {
+                        unicodeEncrypted = false;
+                    }
+                }
+            }
+        }
+        productionStore.keySource = "manual";
+        productionStore.passwords = "";
+        for (const action of ["sendMessage", "editMessage"]) {
+            let forbiddenSends = 0;
+            const message = { content: "keep private text without a password" };
+            const args = action === "sendMessage" ? [CHANNEL, message] : [CHANNEL, "missing-password-id", message];
+            let rejected = false;
+            try {
+                await productionPatches[action].call({}, args, () => { forbiddenSends++; });
+            } catch {
+                rejected = true;
+            }
+            if (!rejected || forbiddenSends !== 0 || message.content !== "keep private text without a password") {
+                missingPasswordRejected = false;
+            }
+        }
+    } finally {
+        unpatchSend();
+        shutdownRemoteKdf();
+        (globalThis as any).vendetta = previousVendetta;
+    }
+    check("production sends and edits encrypt ordinary ZWC text and joined emoji in both modes", unicodeEncrypted);
+    check("enabled manual sends and edits without a password reject without sending or changing text", missingPasswordRejected);
+
+    let lifecycleDecrypted = true;
+    for (const source of ["manual", "remote"] as const) {
+        const lifecycle = createRemoteColdPath({
+            ensureKeys: async () => undefined,
+            prepareSend: async () => undefined,
+            decrypt: () => null,
+            mark: () => "",
+            dispatch: () => undefined,
+            toast: () => undefined,
+            mode: () => source,
+        });
+        const decode = (content: string) => {
+            const parsed = parseCloakedPayload(content);
+            return parsed ? decryptWithRemoteKeys(parsed, [{ settingsRevision: REVISION_A, keys: [KEY_A] }]) : null;
+        };
+        const handler = createFluxHandler({
+            mode: () => source,
+            mark: () => "",
+            isCloaked,
+            manualDecrypt: (content) => {
+                const result = decode(content);
+                return result ? { ...result, password: MANUAL_PASSWORD } : null;
+            },
+            startManual: () => undefined,
+            parseRemote: parseCloakedPayload,
+            remoteDecrypt: (parsed) => decryptWithRemoteKeys(parsed, [{ settingsRevision: REVISION_A, keys: [KEY_A] }]),
+            queueRemote: lifecycle.queueIncoming,
+            observeMessage: lifecycle.observeMessage,
+            hasCompleted: lifecycle.hasCompleted,
+            rememberCompleted: lifecycle.rememberCompleted,
+        });
+        for (const item of [
+            { type: "MESSAGE_CREATE", text: "first private version 👩‍💻" },
+            { type: "MESSAGE_UPDATE", text: "edited private version 👩‍💻" },
+            { type: "LOAD_MESSAGES_SUCCESS", text: "first private version 👩‍💻" },
+        ]) {
+            const message = {
+                id: "lifecycle-id",
+                channel_id: CHANNEL,
+                content: encryptWithKey(item.text, KEY_A, "public cover", fixedRng),
+            };
+            handler(item.type === "LOAD_MESSAGES_SUCCESS"
+                ? { type: item.type, channelId: CHANNEL, messages: [message] }
+                : { type: item.type, message });
+            if (message.content !== item.text) lifecycleDecrypted = false;
+            handler({ type: "MESSAGE_UPDATE", message });
+            if (message.content !== item.text) lifecycleDecrypted = false;
+        }
+        lifecycle.shutdown();
+    }
+    check("completed messages decrypt encrypted edits and fresh history copies in both modes with an empty mark", lifecycleDecrypted);
+
+    let obsoleteDispatchesPrevented = true;
+    const oldCiphertext = encryptWithKey("old private version", KEY_A, "public cover", fixedRng);
+    const newCiphertext = encryptWithKey("new private version", KEY_A, "public cover", fixedRng);
+    for (const item of [
+        { type: "MESSAGE_UPDATE", message: { content: "new public version" }, expected: [] },
+        { type: "MESSAGE_UPDATE", message: { content: "" }, expected: [] },
+        { type: "MESSAGE_UPDATE", message: { content: newCiphertext }, expected: ["new private version"] },
+        { type: "MESSAGE_UPDATE", message: {}, expected: ["old private version"] },
+        { type: "MESSAGE_DELETE", message: {}, expected: [] },
+        { type: "MESSAGE_DELETE_BULK", message: {}, expected: [] },
+    ]) {
+        const keysReady = deferred<unknown>();
+        const contents: string[] = [];
+        const lifecycle = createRemoteColdPath({
+            ensureKeys: () => keysReady.promise,
+            prepareSend: async () => undefined,
+            decrypt(snapshot) {
+                const parsed = parseCloakedPayload(snapshot.ciphertext);
+                return parsed ? decryptWithRemoteKeys(parsed, [{ settingsRevision: REVISION_A, keys: [KEY_A] }])?.text ?? null : null;
+            },
+            mark: () => "",
+            dispatch: (action) => contents.push(action.message.content),
+            toast: () => undefined,
+            mode: () => "remote",
+        });
+        const handler = createFluxHandler({
+            mode: () => "remote",
+            mark: () => "",
+            isCloaked,
+            manualDecrypt: () => null,
+            startManual: () => undefined,
+            parseRemote: parseCloakedPayload,
+            remoteDecrypt: () => null,
+            queueRemote: lifecycle.queueIncoming,
+            observeMessage: lifecycle.observeMessage,
+            hasCompleted: lifecycle.hasCompleted,
+            rememberCompleted: lifecycle.rememberCompleted,
+        });
+        handler({ type: "MESSAGE_CREATE", message: { id: "waiting-id", channel_id: CHANNEL, content: oldCiphertext } });
+        handler({
+            type: item.type,
+            id: "waiting-id",
+            ids: ["waiting-id"],
+            message: { id: "waiting-id", channel_id: CHANNEL, ...item.message },
+        });
+        keysReady.resolve(undefined);
+        await keysReady.promise;
+        await Promise.resolve();
+        if (JSON.stringify(contents) !== JSON.stringify(item.expected)) obsoleteDispatchesPrevented = false;
+        lifecycle.shutdown();
+    }
+    const reentrantKeys = deferred<unknown>();
+    const reentrantContents: string[] = [];
+    const reentrant = createRemoteColdPath({
+        ensureKeys: () => reentrantKeys.promise,
+        prepareSend: async () => undefined,
+        decrypt(snapshot) {
+            const parsed = parseCloakedPayload(snapshot.ciphertext);
+            return parsed ? decryptWithRemoteKeys(parsed, [{ settingsRevision: REVISION_A, keys: [KEY_A] }])?.text ?? null : null;
+        },
+        mark: () => "",
+        dispatch(action) {
+            reentrantContents.push(action.message.content);
+            reentrant.observeMessage("deleted-during-dispatch", undefined);
+        },
+        toast: () => undefined,
+        mode: () => "remote",
+    });
+    reentrant.queueIncoming({ messageId: "first-dispatch", channelId: CHANNEL, ciphertext: oldCiphertext });
+    reentrant.queueIncoming({ messageId: "deleted-during-dispatch", channelId: CHANNEL, ciphertext: newCiphertext });
+    reentrantKeys.resolve(undefined);
+    await reentrantKeys.promise;
+    await Promise.resolve();
+    if (JSON.stringify(reentrantContents) !== JSON.stringify(["old private version"])) obsoleteDispatchesPrevented = false;
+    reentrant.shutdown();
+    check("pending remote plaintext cannot overwrite newer edits or deleted messages", obsoleteDispatchesPrevented);
 
     const modeSwitchLate = deferred<KdfDeriveResponse>();
     let modeSwitchAborts = 0;

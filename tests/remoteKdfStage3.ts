@@ -482,6 +482,33 @@ export async function runRemoteKdfStage3Checks(check: Stage3Check): Promise<void
         !rejectedShort && !rejectedLong && getRemoteSendKeys("123") === null,
     );
 
+    let readWrites = 0;
+    const readStore = new Proxy(JSON.parse(JSON.stringify(DEFAULTS)) as Settings, {
+        set(target, property, value) {
+            if (property === "remoteKeyCache") readWrites++;
+            return Reflect.set(target, property, value);
+        },
+    });
+    initRemoteKeyCache(readStore);
+    storeRemoteDerivedKeys("123", {
+        version: 1,
+        settingsRevision: REVISION,
+        keys: [{ slot: 0, key: KEY }],
+    }, 1000);
+    readWrites = 0;
+    const persistedBeforeReads = JSON.stringify(readStore.remoteKeyCache);
+    const sendRead = getRemoteSendKeys("123");
+    const receiveRead = getRemoteDecryptKeySets("123");
+    getRemoteRevisionCheckedAt();
+    remoteKeyCacheCounts();
+    check(
+        "remote key reads preserve persisted state without storage writes",
+        readWrites === 0
+            && persistedBeforeReads === JSON.stringify(readStore.remoteKeyCache)
+            && toBase64(sendRead![0]) === KEY
+            && toBase64(receiveRead[0].keys[0]) === KEY,
+    );
+
     const orderedStore = JSON.parse(JSON.stringify(DEFAULTS)) as Settings;
     initRemoteKeyCache(orderedStore);
     const SLOT_KEYS = [0, 1, 2].map((slot) => toBase64(Uint8Array.from({ length: 32 }, () => slot + 1)));
@@ -616,7 +643,51 @@ export async function runRemoteKdfStage3Checks(check: Stage3Check): Promise<void
         wasReady && getRemoteSendKeys("123") === null && !remoteKdfStatus().ready,
     );
 
-    async function deriveRace(resolveSecondFirst: boolean): Promise<boolean> {
+    let unchangedChecksPreserveDerives = true;
+    for (const checkStartsFirst of [false, true]) {
+        for (const checkFinishesFirst of [false, true]) {
+            const unchangedStore = JSON.parse(JSON.stringify(DEFAULTS)) as Settings;
+            unchangedStore.remoteHost = "https://cloud.example.test";
+            unchangedStore.remoteAuthToken = TOKEN;
+            const unchangedDerive = deferred<KdfDeriveResponse>();
+            const unchangedRevision = deferred<KdfRevisionResponse>();
+            initSettings(unchangedStore);
+            initRemoteKdf(unchangedStore, {
+                clientFactory: () => ({
+                    derive: () => unchangedDerive.promise,
+                    revision: () => unchangedRevision.promise,
+                    abortAll() {},
+                    capabilities: () => ({ supported: true, boundingMode: "stream" }),
+                }),
+                now: () => now,
+            });
+            setRemoteSessionKey("unchanged-revision-key");
+            applyRemoteRevision({ version: 1, settingsRevision: REVISION }, now);
+            const firstOperation = checkStartsFirst ? refreshRemoteRevision(true) : refreshRemoteChannel("404");
+            const secondOperation = checkStartsFirst ? refreshRemoteChannel("404") : refreshRemoteRevision(true);
+            const revisionResult = errorCode(checkStartsFirst ? firstOperation : secondOperation);
+            const deriveResult = errorCode(checkStartsFirst ? secondOperation : firstOperation);
+            if (checkFinishesFirst) {
+                unchangedRevision.resolve({ version: 1, settingsRevision: REVISION });
+                await revisionResult;
+                unchangedDerive.resolve({ version: 1, settingsRevision: REVISION, keys: [{ slot: 0, key: KEY }] });
+            } else {
+                unchangedDerive.resolve({ version: 1, settingsRevision: REVISION, keys: [{ slot: 0, key: KEY }] });
+                await deriveResult;
+                unchangedRevision.resolve({ version: 1, settingsRevision: REVISION });
+            }
+            if (
+                await revisionResult !== "NO_ERROR"
+                || await deriveResult !== "NO_ERROR"
+                || toBase64(getRemoteSendKeys("404")?.[0] ?? new Uint8Array()) !== KEY
+            ) {
+                unchangedChecksPreserveDerives = false;
+            }
+        }
+    }
+    check("unchanged revision checks preserve valid derivations in every start and completion order", unchangedChecksPreserveDerives);
+
+    async function deriveRace(resolveSecondFirst: boolean, knownRevision: boolean): Promise<boolean> {
         const raceStore = JSON.parse(JSON.stringify(DEFAULTS)) as Settings;
         raceStore.remoteHost = "https://cloud.example.test";
         raceStore.remoteAuthToken = TOKEN;
@@ -633,6 +704,7 @@ export async function runRemoteKdfStage3Checks(check: Stage3Check): Promise<void
         initSettings(raceStore);
         initRemoteKdf(raceStore, { clientFactory: () => raceClient, now: () => now });
         setRemoteSessionKey("derive-race-key");
+        if (knownRevision) applyRemoteRevision({ version: 1, settingsRevision: revisions[0] }, now);
         const first = refreshRemoteChannel("101");
         const second = refreshRemoteChannel("202");
         const firstResponse = { version: 1 as const, settingsRevision: revisions[0], keys: [{ slot: 0, key: KEY }] };
@@ -642,21 +714,53 @@ export async function runRemoteKdfStage3Checks(check: Stage3Check): Promise<void
             const secondCode = await errorCode(second);
             byChannel["101"].resolve(firstResponse);
             const firstCode = await errorCode(first);
-            return secondCode === "NO_ERROR" && firstCode === "REMOTE_STALE"
-                && getRemoteSendKeys("202") !== null && getRemoteSendKeys("101") === null
+            return secondCode === "NO_ERROR" && firstCode === (knownRevision ? "NO_ERROR" : "REMOTE_STALE")
+                && getRemoteSendKeys("202") !== null && (getRemoteSendKeys("101") !== null) === knownRevision
                 && remoteKdfStatus().ready;
         }
         byChannel["101"].resolve(firstResponse);
         const firstCode = await errorCode(first);
         byChannel["202"].resolve(secondResponse);
         const secondCode = await errorCode(second);
-        return firstCode === "NO_ERROR" && secondCode === "REMOTE_STALE"
-            && getRemoteSendKeys("101") !== null && getRemoteSendKeys("202") === null
+        return firstCode === "NO_ERROR" && secondCode === (knownRevision ? "NO_ERROR" : "REMOTE_STALE")
+            && getRemoteSendKeys("101") !== null && (getRemoteSendKeys("202") !== null) === knownRevision
             && remoteKdfStatus().ready;
     }
     check(
-        "derive-vs-derive mutation epoch prevents overwrite in both completion orders",
-        await deriveRace(false) && await deriveRace(true),
+        "revision transitions reject stale derivations while same-revision channels remain independent",
+        await deriveRace(false, false) && await deriveRace(true, false)
+            && await deriveRace(false, true) && await deriveRace(true, true),
+    );
+
+    const proofStore = JSON.parse(JSON.stringify(DEFAULTS)) as Settings;
+    proofStore.remoteHost = "https://cloud.example.test";
+    proofStore.remoteAuthToken = TOKEN;
+    const olderFailure = deferred<KdfDeriveResponse>();
+    const newerSuccess = deferred<KdfDeriveResponse>();
+    initSettings(proofStore);
+    initRemoteKdf(proofStore, {
+        clientFactory: () => ({
+            derive: (channelId) => channelId === "101" ? olderFailure.promise : newerSuccess.promise,
+            revision: async () => ({ version: 1, settingsRevision: REVISION }),
+            abortAll() {},
+            capabilities: () => ({ supported: true, boundingMode: "stream" }),
+        }),
+        now: () => now,
+    });
+    setRemoteSessionKey("preserved-proof-key");
+    applyRemoteRevision({ version: 1, settingsRevision: REVISION }, now);
+    const failedProofResult = errorCode(refreshRemoteChannel("101"));
+    const successfulProofResult = errorCode(refreshRemoteChannel("202"));
+    newerSuccess.resolve({ version: 1, settingsRevision: REVISION, keys: [{ slot: 0, key: KEY }] });
+    await successfulProofResult;
+    olderFailure.reject(new RemoteKdfError("KDF_BUSY"));
+    const failedProofCode = await failedProofResult;
+    check(
+        "an older failed channel derivation cannot erase newer valid verification",
+        failedProofCode === "KDF_BUSY"
+            && remoteKdfStatus().ready
+            && remoteKdfStatus().cooldowns > 0
+            && toBase64(getRemoteSendKeys("202")![0]) === KEY,
     );
 
     const generationStore = JSON.parse(JSON.stringify(DEFAULTS)) as Settings;

@@ -213,7 +213,7 @@ This milestone is about **speed**: the first-time-per-channel Argon2id key deriv
 ### Key Derivation (async, one-time per channel+password)
 ### Key Sync (desktop → mobile, skip Argon2)
 - All persistent state lives in `vendetta.plugin.storage` (a reactive JSON proxy), accessed via the typed `Settings` wrapper in `src/settings.ts`
-- In-memory volatile state: key Map (`mem`), pending derivation Map (`pending`), winner hint Map (`winners`), decryptedIds Set, deriving Set — all module-level singletons cleared in `onUnload`
+- In-memory volatile state: key Map (`mem`), pending derivation Map (`pending`), winner hint Map (`winners`), completed-content fingerprints, deriving snapshots — cleared in `onUnload`
 ## Key Abstractions
 - Purpose: Avoid repeating the expensive 64MiB Argon2id derivation per message
 - Files: `src/core/keycache.ts`
@@ -236,7 +236,7 @@ This milestone is about **speed**: the first-time-per-channel Argon2id key deriv
 - Responsibilities: Render password/cover/mark fields, key import field, insecure-RNG toggle
 ## Architectural Constraints
 - **Threading:** Hermes is single-threaded. All Flux/send patches are synchronous (no blocking I/O). Argon2id is deferred via `argon2idAsync` with `asyncTick:50ms` to yield macrotasks to the render loop.
-- **Global state:** Module-level singletons in `src/core/keycache.ts` (`mem`, `pending`, `winners`), `src/discord/flux.ts` (`deriving`, `decryptedIds`), `src/discord/send.ts` (`disposers`), `src/discord/commands.ts` (`dispose`), `src/crypto/random.ts` (`rngFn`, `secure`), `src/settings.ts` (`store`). All are reset on `onUnload`.
+- **Global state:** Module-level singletons in `src/core/keycache.ts` (`mem`, `pending`, `winners`), `src/discord/flux.ts` (`deriving`), `src/discord/send.ts` (`disposers`), `src/discord/commands.ts` (`dispose`), `src/crypto/random.ts` (`rngFn`, `secure`), `src/settings.ts` (`store`). All are reset on `onUnload`.
 - **No TextEncoder/TextDecoder:** Hermes does not guarantee these globals. All UTF-8 and base64 handling uses fflate's `strToU8/strFromU8` and the hand-rolled `src/util/base64.ts`.
 - **No `class` syntax in output:** Hermes `eval` rejects class syntax at parse time. The build pipeline down-levels to ES5 via swc with `iterableIsArray:true` to avoid iterator-protocol for...of lowering (which drops the first element under Discord's Hermes).
 - **No circular imports:** Import graph is strictly layered: `discord` → `core` → `crypto/stego/util`.
@@ -259,24 +259,6 @@ This milestone is about **speed**: the first-time-per-channel Argon2id key deriv
 No project skills found. Add skills to any of: `.claude/skills/`, `.agents/skills/`, `.cursor/skills/`, `.github/skills/`, or `.codex/skills/` with a `SKILL.md` index file.
 <!-- GSD:skills-end -->
 
-<!-- GSD:workflow-start source:GSD defaults -->
-## GSD Workflow Enforcement
+## Workflow
 
-Before using Edit, Write, or other file-changing tools, start work through a GSD command so planning artifacts and execution context stay in sync.
-
-Use these entry points:
-- `/gsd-quick` for small fixes, doc updates, and ad-hoc tasks
-- `/gsd-debug` for investigation and bug fixing
-- `/gsd-execute-phase` for planned phase work
-
-Do not make direct repo edits outside a GSD workflow unless the user explicitly asks to bypass it.
-<!-- GSD:workflow-end -->
-
-
-
-<!-- GSD:profile-start -->
-## Developer Profile
-
-> Profile not yet configured. Run `/gsd-profile-user` to generate your developer profile.
-> This section is managed by `generate-claude-profile` -- do not edit manually.
-<!-- GSD:profile-end -->
+Do not use GSD. Work directly on a branch, verify changes, and use GitHub Actions for builds.

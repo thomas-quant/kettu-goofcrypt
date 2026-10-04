@@ -17,13 +17,12 @@ import { noteError } from "../core/health";
 import { isCloaked } from "../stego/zwc";
 import {
     isRemoteMessageCompleted,
+    observeRemoteMessage,
     queueRemoteDecrypt,
     rememberRemoteMessageCompleted,
     type RemoteMessageSnapshot,
 } from "./remoteColdPath";
 import { FluxDispatcher, showToast } from "./metro";
-
-const MAX_COMPLETED_MESSAGE_IDS = 1000;
 
 export interface FluxHandlerDependencies {
     mode(): KeySource | null;
@@ -34,30 +33,22 @@ export interface FluxHandlerDependencies {
     parseRemote(content: string): ParsedCloakedPayload | null;
     remoteDecrypt(parsed: ParsedCloakedPayload, channelId: string): RemoteDecryptResult | null;
     queueRemote(snapshot: RemoteMessageSnapshot): void;
-    hasCompleted(messageId: string): boolean;
-    rememberCompleted(messageId: string): void;
+    observeMessage(messageId: string, content: string | undefined): void;
+    hasCompleted(messageId: string, content: string): boolean;
+    rememberCompleted(messageId: string, content: string): void;
 }
 
 let unpatch: (() => void) | null = null;
 let productionHandler: ((payload: any) => void) | null = null;
 let fluxGeneration = 0;
-const deriving = new Set<string>();
-const decryptedIds = new Set<string>();
+const deriving = new Map<string, { id: string; channel_id: string; content: string }>();
 let activeDerivations = 0;
 let peakDerivations = 0;
 
-function rememberManualCompleted(messageId: string): void {
-    if (!messageId) return;
-    decryptedIds.delete(messageId);
-    decryptedIds.add(messageId);
-    if (decryptedIds.size <= MAX_COMPLETED_MESSAGE_IDS) return;
-    const ids = Array.from(decryptedIds);
-    decryptedIds.delete(ids[0]);
-}
-
-function rememberCompleted(messageId: string): void {
-    rememberManualCompleted(messageId);
-    rememberRemoteMessageCompleted(messageId);
+function observeMessage(messageId: string, content: string | undefined): void {
+    const snapshot = deriving.get(messageId);
+    if (snapshot && snapshot.content !== content) deriving.delete(messageId);
+    observeRemoteMessage(messageId, content);
 }
 
 /** Derive missing manual keys, then re-dispatch the original manual message. */
@@ -66,7 +57,8 @@ function backgroundManualDecrypt(message: any, channelId: string): void {
     const passwords = getPasswordList();
     if (!id || passwords.length === 0 || deriving.has(id)) return;
     if (passwords.every((password) => getCachedKey(channelId, password))) return;
-    deriving.add(id);
+    const snapshot = { id, channel_id: channelId, content: message.content };
+    deriving.set(id, snapshot);
     const generation = fluxGeneration;
     const debug = settings().debugInstrument;
     if (debug) {
@@ -80,6 +72,7 @@ function backgroundManualDecrypt(message: any, channelId: string): void {
 
     (async () => {
         for (let i = 0; i < passwords.length; i++) {
+            if (generation !== fluxGeneration || deriving.get(id) !== snapshot || keySource() !== "manual") return;
             const password = passwords[i];
             if (getCachedKey(channelId, password)) continue;
             try {
@@ -88,34 +81,35 @@ function backgroundManualDecrypt(message: any, channelId: string): void {
                 noteError("deriveFails", error);
             }
         }
-        if (generation !== fluxGeneration) return;
-        const result = decryptWithCachedKeys(message.content, channelId, passwords);
-        if (!result || generation !== fluxGeneration) return;
-        rememberCompleted(id);
+        if (generation !== fluxGeneration || deriving.get(id) !== snapshot || keySource() !== "manual") return;
+        const result = decryptWithCachedKeys(snapshot.content, channelId, passwords);
+        if (!result || generation !== fluxGeneration || deriving.get(id) !== snapshot) return;
+        const content = settings().mark + result.text;
+        rememberRemoteMessageCompleted(id, content);
         try {
             FluxDispatcher().dispatch({
                 type: "MESSAGE_UPDATE",
                 channelId,
-                message: { ...message, content: settings().mark + result.text },
+                message: { ...snapshot, content },
             });
         } catch {
             try {
                 vendetta.logger.error("GoofCrypt manual re-dispatch failed");
             } catch {}
         }
-    })().finally(() => {
-        deriving.delete(id);
+    })().catch((error) => noteError("deriveFails", error)).finally(() => {
+        if (deriving.get(id) === snapshot) deriving.delete(id);
         if (debug && activeDerivations > 0) activeDerivations--;
     });
 }
 
 export function createFluxHandler(dependencies: FluxHandlerDependencies): (payload: any) => void {
     function handleMessage(message: any, channelId: string | undefined): void {
-        if (!message?.content || !channelId) return;
+        if (!message || !channelId || typeof message.content !== "string") return;
         const id = String(message.id ?? "");
-        if (id && dependencies.hasCompleted(id)) return;
+        if (id) dependencies.observeMessage(id, message.content);
+        if (!message.content || (id && dependencies.hasCompleted(id, message.content))) return;
         const mark = dependencies.mark();
-        if (mark && message.content.startsWith(mark)) return;
 
         const mode = dependencies.mode();
         if (mode === "manual") {
@@ -123,7 +117,7 @@ export function createFluxHandler(dependencies: FluxHandlerDependencies): (paylo
             const result = dependencies.manualDecrypt(message.content, channelId);
             if (result) {
                 message.content = mark + result.text;
-                if (id) dependencies.rememberCompleted(id);
+                if (id) dependencies.rememberCompleted(id, message.content);
             } else {
                 dependencies.startManual(message, channelId);
             }
@@ -136,7 +130,7 @@ export function createFluxHandler(dependencies: FluxHandlerDependencies): (paylo
         const result = dependencies.remoteDecrypt(parsed, channelId);
         if (result) {
             message.content = mark + result.text;
-            if (id) dependencies.rememberCompleted(id);
+            if (id) dependencies.rememberCompleted(id, message.content);
             return;
         }
         if (!id) return;
@@ -161,6 +155,18 @@ export function createFluxHandler(dependencies: FluxHandlerDependencies): (paylo
                     }
                 }
                 break;
+            case "MESSAGE_DELETE": {
+                const id = String(payload.id ?? payload.message?.id ?? "");
+                if (id) dependencies.observeMessage(id, undefined);
+                break;
+            }
+            case "MESSAGE_DELETE_BULK":
+                if (Array.isArray(payload.ids)) {
+                    for (let i = 0; i < payload.ids.length; i++) {
+                        dependencies.observeMessage(String(payload.ids[i]), undefined);
+                    }
+                }
+                break;
             case "MESSAGE_START_EDIT": {
                 const mark = dependencies.mark();
                 if (mark && typeof payload.content === "string" && payload.content.startsWith(mark)) {
@@ -182,8 +188,9 @@ function createProductionHandler(): (payload: any) => void {
         parseRemote: parseCloakedPayload,
         remoteDecrypt: (parsed, channelId) => decryptWithRemoteKeys(parsed, getRemoteDecryptKeySets(channelId)),
         queueRemote: queueRemoteDecrypt,
-        hasCompleted: (id) => decryptedIds.has(id) || isRemoteMessageCompleted(id),
-        rememberCompleted,
+        observeMessage,
+        hasCompleted: isRemoteMessageCompleted,
+        rememberCompleted: rememberRemoteMessageCompleted,
     });
 }
 
@@ -204,7 +211,6 @@ export function patchFlux(): void {
 export function unpatchFlux(): void {
     fluxGeneration += 1;
     deriving.clear();
-    decryptedIds.clear();
     activeDerivations = 0;
     peakDerivations = 0;
     productionHandler = null;

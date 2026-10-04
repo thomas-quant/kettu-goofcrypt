@@ -8,6 +8,11 @@ Current verdict: **AUTOMATED_PASS / DEVICE_PENDING**. The automated Stage 5
 scope is green. Device release acceptance is not complete, and this document
 does not authorize a weaker transport fallback.
 
+The dated Stage 5 evidence below is a historical snapshot. Later mobile
+sender/message-state regression fixes and their verification are recorded in
+[`REVIEW_FIXES.md`](REVIEW_FIXES.md); they do not constitute a new server-bridge
+rerun or close any physical-device gate.
+
 ## Status vocabulary
 
 | Status | Meaning |

@@ -75,6 +75,7 @@ let configGeneration = 0;
 let mutationEpoch = 0;
 let nextRequestOrder = 0;
 let lastAppliedOrder = 0;
+let lastVerifiedOrder = 0;
 let inFlightRevision: Promise<KdfRevisionResponse> | undefined;
 const inFlightDerives = new Map<string, Promise<KdfDeriveResponse>>();
 const inFlightSendPreparations = new Map<string, Promise<void>>();
@@ -136,6 +137,12 @@ function applyLocalMutation(): void {
     mutationEpoch += 1;
 }
 
+function applyRevisionMutation(order: number, previous: string | undefined, next: string): void {
+    if (previous === next) return;
+    lastAppliedOrder = order;
+    mutationEpoch += 1;
+}
+
 function stale(): never {
     fail("REMOTE_STALE");
 }
@@ -193,6 +200,7 @@ export function initRemoteKdf(persisted: Settings, dependencies: RemoteKdfDepend
     mutationEpoch = 0;
     nextRequestOrder = 0;
     lastAppliedOrder = 0;
+    lastVerifiedOrder = 0;
     lastCode = undefined;
     client = buildClient();
 }
@@ -294,10 +302,10 @@ export function refreshRemoteRevision(force = true): Promise<KdfRevisionResponse
         try {
             const response = await remote.revision();
             if (!generationActive(generation) || order <= lastAppliedOrder) stale();
+            const previousRevision = getRemoteAuthoritativeRevision();
             const applied = applyRemoteRevision(response, now());
             if (!applied.ok) fail("REMOTE_PROTOCOL_ERROR");
-            lastAppliedOrder = order;
-            mutationEpoch += 1;
+            applyRevisionMutation(order, previousRevision, response.settingsRevision);
             if (applied.changed) clearRemoteVerification();
             lastCode = undefined;
             return response;
@@ -356,27 +364,27 @@ export function refreshRemoteChannel(channelId: string): Promise<KdfDeriveRespon
                 stale();
             }
             if (!storeRemoteDerivedKeys(channelId, response, now())) fail("REMOTE_PROTOCOL_ERROR");
-            lastAppliedOrder = order;
-            mutationEpoch += 1;
+            applyRevisionMutation(order, startingRevision, response.settingsRevision);
+            lastVerifiedOrder = Math.max(lastVerifiedOrder, order);
             markRemoteVerified(response.settingsRevision, generation);
             cooldowns.delete(key);
             lastCode = undefined;
             return response;
         } catch (error) {
             const normalized = remoteError(error);
-            // Do not let an older completion erase proof installed by a newer
-            // mutation or recreate cooldown state after mode/config invalidation.
             if (
                 generationActive(generation)
                 && epoch === mutationEpoch
                 && startingRevision === getRemoteAuthoritativeRevision()
                 && order > lastAppliedOrder
             ) {
-                clearRemoteVerification();
                 if (shouldCooldown(normalized.code)) {
                     cooldowns.set(key, { until: now() + REMOTE_FAILURE_COOLDOWN_MS, code: normalized.code });
                 }
-                lastCode = normalized.code;
+                if (order > lastVerifiedOrder) {
+                    clearRemoteVerification();
+                    lastCode = normalized.code;
+                }
             }
             throw normalized;
         }
