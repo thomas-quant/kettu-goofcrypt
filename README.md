@@ -167,4 +167,10 @@ only `main` deploys it to GitHub Pages. No GSD workflow is required.
 - `npm test` — esbuild-bundles `tests/harness.ts` (with the `stegcloak-rs` wasm) and
   runs the byte-compat cross-check.
 - `npm run build` — produces the Pages site `site/` (`manifest.json` + `index.js`),
-  which is deployed to GitHub Pages.
+  which is deployed to GitHub Pages from `main`.
+- `node tests/bundle.mjs` — runs the shipping bundle in a VM without browser
+  text codecs or Buffer, checking Unicode send/edit/decrypt round trips.
+
+See [`docs/REVIEW_FIXES.md`](docs/REVIEW_FIXES.md) for the sender/lifecycle fixes,
+the corrected mobile UTF-8 fallback, and limitations for messages or keys already
+produced by the older broken encoding.

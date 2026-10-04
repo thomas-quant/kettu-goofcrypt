@@ -36,6 +36,7 @@ jobs:
           node-version: 24
       - run: npm ci
       - run: npm run build
+      - run: node tests/bundle.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: goofcrypt-site

@@ -38,7 +38,7 @@ This milestone is about **speed**: the first-time-per-channel Argon2id key deriv
 ## Key Dependencies
 - `@noble/ciphers` 1.3.0 — XChaCha20-Poly1305 AEAD encryption (`src/crypto/aead.ts`); implements the wire-compatible cipher matching stegcloak-rs/GoofCord
 - `@noble/hashes` 1.8.0 — Argon2id key derivation (`src/crypto/argon.ts`); pure JS, 64 MiB memory cost; also provides SHA-256 for password ID hashing (`src/core/keycache.ts`)
-- `fflate` 0.8.3 — raw DEFLATE compression/decompression (`src/crypto/deflate.ts`); also supplies `strToU8`/`strFromU8` for UTF-8 encoding (replacing `TextEncoder` which is absent in Hermes)
+- `fflate` 0.8.3 — raw DEFLATE compression/decompression and UTF-8 decoding (`src/crypto/deflate.ts`); UTF-8 encoding is explicit because fflate's no-TextEncoder fallback corrupts surrogate pairs
 - `stegcloak-rs` (github:Milkshiift/stegcloak-rs) — WASM reference implementation used only in the test harness (`tests/harness.ts`) to cross-check byte-for-byte compatibility; not shipped in the plugin bundle
 - `@swc/core` 1.15.40 — ES5 transpilation step in `scripts/build.mjs`; critical for Hermes compatibility (`class` elimination, `iterableIsArray` assumption to eliminate iterator-protocol `for...of` lowering)
 - `esbuild` 0.24.2 — bundler; applies a custom plugin (`noble-macrotask-yield`) to patch `@noble/hashes` `nextTick` from microtask to `setTimeout` so Argon2 derivation yields the UI thread
@@ -237,7 +237,7 @@ This milestone is about **speed**: the first-time-per-channel Argon2id key deriv
 ## Architectural Constraints
 - **Threading:** Hermes is single-threaded. All Flux/send patches are synchronous (no blocking I/O). Argon2id is deferred via `argon2idAsync` with `asyncTick:50ms` to yield macrotasks to the render loop.
 - **Global state:** Module-level singletons in `src/core/keycache.ts` (`mem`, `pending`, `winners`), `src/discord/flux.ts` (`deriving`), `src/discord/send.ts` (`disposers`), `src/discord/commands.ts` (`dispose`), `src/crypto/random.ts` (`rngFn`, `secure`), `src/settings.ts` (`store`). All are reset on `onUnload`.
-- **No TextEncoder/TextDecoder:** Hermes does not guarantee these globals. All UTF-8 and base64 handling uses fflate's `strToU8/strFromU8` and the hand-rolled `src/util/base64.ts`.
+- **No TextEncoder/TextDecoder:** Hermes does not guarantee these globals. UTF-8 uses the explicit encoder and fflate decoder in `src/crypto/deflate.ts`; base64 uses `src/util/base64.ts`.
 - **No `class` syntax in output:** Hermes `eval` rejects class syntax at parse time. The build pipeline down-levels to ES5 via swc with `iterableIsArray:true` to avoid iterator-protocol for...of lowering (which drops the first element under Discord's Hermes).
 - **No circular imports:** Import graph is strictly layered: `discord` → `core` → `crypto/stego/util`.
 - **Encryption gated on secure RNG:** The send patch only encrypts if `secureRngAvailable()` is true (or `allowInsecureRng` is explicitly opted in). Decryption is never gated.

@@ -14,6 +14,7 @@ import { StegCloak } from "stegcloak-rs";
 // Our pure-JS reimplementation.
 import { hide as ourHide, reveal as ourReveal, isCloaked as ourIsCloaked, DecryptionError } from "../src/core/stegcloak";
 import { conceal, extract } from "../src/stego/zwc";
+import { utf8Encode } from "../src/crypto/deflate";
 // Wave-0 CI assertions ([7]-[9]): ProbeReport schema, nextTick caret tripwire, D-09 vector.
 import { nextTick } from "@noble/hashes/utils";
 import { deriveKey } from "../src/crypto/argon";
@@ -97,7 +98,7 @@ const CASES: Case[] = [
     { name: "tabs + multi-space runs", msg: "tabs and spaces", pw: "k", cover: "a\tb  c\n\nd   e" },
     { name: "NBSP + unicode whitespace", msg: "weird ws", pw: "pw", cover: "a b c　d" },
     { name: "leading/trailing whitespace", msg: "edges", pw: "pw", cover: "   padded   " },
-    { name: "unicode message + emoji", msg: "unicode 😀 café — naïve", pw: "k", cover: "Hello there my friend" },
+    { name: "unicode message + emoji", msg: "unicode 😀 café — naïve", pw: "password 👩‍💻", cover: "Hello there my friend" },
     { name: "long message (5k)", msg: "x".repeat(5000), pw: "k", cover: "a cover with several words here" },
 ];
 
@@ -421,6 +422,24 @@ console.log("\n[11] Remote KDF v1 contracts (strict mobile boundary)");
 
 await runRemoteKdfStage3Checks(check);
 await runRemoteKdfStage4Checks(check);
+
+console.log("\n[18] UTF-8 standard encodings");
+{
+    let correct = true;
+    for (const [text, expectedHex] of [
+        ["", ""],
+        ["\u0000\u007f\u0080\u07ff\u0800\uffff", "007fc280dfbfe0a080efbfbf"],
+        ["👩‍💻", "f09f91a9e2808df09f92bb"],
+        ["\ud800\udc00\udbff\udfff", "f0908080f48fbfbf"],
+        ["\ud800x\udc00", "efbfbd78efbfbd"],
+        ["\ud800\ud800\udc00", "efbfbdf0908080"],
+    ]) {
+        const bytes = utf8Encode(text);
+        const actualHex = Array.from(bytes).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+        if (actualHex !== expectedHex) correct = false;
+    }
+    check("UTF-8 preserves scalar boundaries and replaces isolated surrogates", correct);
+}
 
 console.log(`\n${failed === 0 ? "✅" : "❌"} harness: ${passed} passed, ${failed} failed\n`);
 if (failed !== 0) throw new Error(`${failed} harness checks failed`);
